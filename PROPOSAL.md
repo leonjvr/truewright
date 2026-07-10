@@ -277,13 +277,15 @@ ai-browser/
 
 ## 12. Phased Roadmap
 
+> **Revised 2026-07-11** after the external-research review (`.research/REVIEW.md`): the browser binary, not the driver, is the dominant cost, and motion-video capture is an explicit product requirement. Two browser-side phases (1.5a/1.5b) were inserted ahead of the human-motion engine, and the zero-download principle was deliberately relaxed for headless runs (auto-downloaded `chrome-headless-shell`, cached, with installed-Chrome fallback; headed runs still use the installed browser).
+
 | Phase | Scope | Duration | Exit criteria |
 |---|---|---|---|
-| **0 — CDP spike** | Hand-rolled client: attach to installed Chrome *and* Edge, create context, navigate, `Runtime.evaluate`, screenshot | 1–2 wks | `aib doctor` passes on both browsers; command round-trip p50 < 5 ms |
-| **1 — Agent MVP** | Daemon + stdio MCP; injected AX walker + refs; navigate/snapshot/click/type/press/screenshot/wait_for; instant input through the actionability gate | 3–4 wks | An agent completes a 10-step form flow using snapshots only (no screenshots); **published memory benchmark vs playwright-mcp** (daemon RSS, total footprint, 8 parallel sessions); snapshot median ≤ 1.5k tokens over a 20-page corpus |
+| **0 — CDP spike** ✅ | Hand-rolled client: attach to installed Chrome *and* Edge, create context, navigate, `Runtime.evaluate`, screenshot | 1–2 wks | `aib doctor` passes on both browsers; command round-trip p50 < 5 ms |
+| **1 — Agent MVP** ✅ | Stdio MCP; injected walker + refs; navigate/snapshot/click/type/press/screenshot/wait_for; instant input through a bounded-poll actionability gate (daemon + diff snapshots deferred) | 3–4 wks | An agent completes a form flow using snapshots only; measured driver footprint vs Playwright (8 MB vs 120 MB RSS, 0.03 s vs 0.80 s CPU) |
+| **1.5a — Browser efficiency** | Memory-reduction launch flags; auto-downloaded, cached `chrome-headless-shell` as the default headless binary with installed-Chrome fallback; process-tree memory measurement in doctor/bench | 1 wk | Measured tree-RSS reduction for headless-shell vs installed Chrome recorded as evidence; suite green on host + container |
+| **1.5b — Screencast capture** | `Page.startScreencast` recording: JPEG frame sequence + manifest, animated GIF (pure Rust), optional WebM via ffmpeg; `browser_record_start/stop` MCP tools | 1 wk | A recording of an animated fixture produces ≥N frames and a playable clip, verified headed by a human and by integration test |
 | **2 — Human motion** | motion crate, personas, seeded timelines, CDP backend; diff-based `changes:` in action responses | 2–3 wks | Same seed ⇒ identical timelines (golden-file test); drag-and-drop and hover menus work; 8 parallel motion sessions without cross-talk |
 | **3 — Determinism** | Fetch mocking + record/replay, init scripts, both clock modes, seeded randomness, console capture, JSONL traces, `browser_assert`, YAML runner + trace→YAML export | 3–4 wks | A recorded agent exploration replays green 20/20 against mocked network; a 15-test suite runs headless in CI |
 | **4 — True-user mode** | SendInput backend, calibration probe, focus management, serialization queue | 2–3 wks | Third-party OAuth login completes via OS input; calibration correct at 100/150/200 % DPI and 80/100/125 % zoom; mixed-DPI dual-monitor test passes |
 | **5 — Hardening** | OOPIF/popup auto-attach, shadow-DOM edge corpus, weekly Chrome-beta CI, HTML trace viewer, streamable-HTTP polish, **BiDi spike** to validate the protocol trait | ongoing | — |
-
-First implementation step: **Phase 0 spike** in this repo.

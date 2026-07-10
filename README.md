@@ -10,7 +10,7 @@ An LLM-first browser-testing engine: a single Rust binary that drives your insta
 
 - **Phase 0 (CDP spike) — done.** A minimal hand-rolled CDP client (`crates/cdp`) attaches to installed Chrome/Edge, creates an isolated browser context and page, navigates, evaluates JS, and captures a screenshot — all with typed commands over a flatten-session WebSocket connection.
 - **Phase 1 (agent MVP) — done.** `crates/engine` adds a session layer with an injected DOM/ARIA walker (token-efficient, ref-addressable snapshots), bounded-poll actionability, and click/type/press/wait_for/screenshot. `crates/mcp` + `aib mcp` expose it all as a stdio MCP server (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_press`, `browser_wait_for`, `browser_screenshot`, `browser_close`), verified end-to-end against a real page. This is a scoped-down slice of PROPOSAL.md's full vision — see `openspec/changes/archive/*-phase-1-agent-mvp/design.md` for exactly what's deferred (isolated-world injection, MutationObserver-driven actionability, human motion, multi-session daemon).
-- **Next: Phase 2 (human motion)** — seeded, persona-based mouse/keyboard timing shared between the CDP backend and (later) a true OS-input backend.
+- **Next: browser efficiency + screencast capture** (re-prioritized 2026-07-11 after the external-research review in `.research/REVIEW.md`): memory-reduction launch flags and auto-downloaded `chrome-headless-shell` for headless runs, then `Page.startScreencast`-based video recording (`browser_record_start`/`browser_record_stop`). The human-motion engine (original Phase 2) follows after those.
 
 ## MCP server
 
