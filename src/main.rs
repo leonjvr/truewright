@@ -1,7 +1,7 @@
 mod doctor;
 mod mcp;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(
@@ -13,11 +13,33 @@ struct Cli {
     command: Command,
 }
 
+/// Which browser binary headless runs use (browser-attach spec: "Managed
+/// chrome-headless-shell for headless runs").
+#[derive(Clone, Copy, Default, ValueEnum)]
+enum BrowserArg {
+    /// Managed chrome-headless-shell (auto-downloaded and cached on first
+    /// use), falling back to the installed browser if unavailable.
+    #[default]
+    Auto,
+    /// Always the installed Chrome/Edge; never download anything.
+    Installed,
+}
+
+impl From<BrowserArg> for cdp::launch::BrowserPreference {
+    fn from(arg: BrowserArg) -> Self {
+        match arg {
+            BrowserArg::Auto => cdp::launch::BrowserPreference::Auto,
+            BrowserArg::Installed => cdp::launch::BrowserPreference::Installed,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
-    /// Attach to every installed Chromium browser and run the full
-    /// attach→navigate→evaluate→screenshot cycle, reporting pass/fail and
-    /// command round-trip latency (doctor-cli spec).
+    /// Run the full attach→navigate→evaluate→screenshot cycle against the
+    /// managed headless-shell and every installed Chromium browser,
+    /// reporting pass/fail, command latency, and process-tree memory
+    /// (doctor-cli spec).
     Doctor {
         /// Emit a single machine-readable JSON report instead of text.
         #[arg(long)]
@@ -25,6 +47,9 @@ enum Command {
         /// Launch browsers headed instead of headless.
         #[arg(long)]
         headed: bool,
+        /// Browser selection for headless runs.
+        #[arg(long, value_enum, default_value_t = BrowserArg::Auto)]
+        browser: BrowserArg,
     },
     /// Run the `browser` MCP server over stdio (mcp-server spec). Configure
     /// this as an MCP server in an agent host; the browser session is
@@ -33,6 +58,9 @@ enum Command {
         /// Launch the browser headed instead of headless.
         #[arg(long)]
         headed: bool,
+        /// Browser selection for headless runs.
+        #[arg(long, value_enum, default_value_t = BrowserArg::Auto)]
+        browser: BrowserArg,
     },
 }
 
@@ -48,7 +76,17 @@ async fn main() -> std::process::ExitCode {
 
     let cli = Cli::parse();
     match cli.command {
-        Command::Doctor { json, headed } => doctor::run(json, !headed).await,
-        Command::Mcp { headed } => mcp::run(!headed).await,
+        Command::Doctor {
+            json,
+            headed,
+            browser,
+        } => {
+            let installed_only = matches!(
+                cdp::launch::BrowserPreference::from(browser),
+                cdp::launch::BrowserPreference::Installed
+            );
+            doctor::run(json, !headed, installed_only).await
+        }
+        Command::Mcp { headed, browser } => mcp::run(!headed, browser.into()).await,
     }
 }

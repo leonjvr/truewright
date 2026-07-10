@@ -5,8 +5,14 @@ use mcp_server::AibTools;
 use rmcp::transport::stdio;
 use rmcp::ServiceExt;
 
-pub async fn run(headless: bool) -> std::process::ExitCode {
-    let service = match AibTools::new(headless).serve(stdio()).await {
+pub async fn run(
+    headless: bool,
+    browser_pref: cdp::launch::BrowserPreference,
+) -> std::process::ExitCode {
+    let service = match AibTools::with_browser_pref(headless, browser_pref)
+        .serve(stdio())
+        .await
+    {
         Ok(service) => service,
         Err(e) => {
             tracing::error!(error = %e, "failed to start MCP server");

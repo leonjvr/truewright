@@ -2,6 +2,7 @@
 //! see /openspec/changes/phase-0-cdp-spike/design.md for the rationale.
 
 pub mod connection;
+pub mod download;
 pub mod error;
 pub mod launch;
 pub mod ops;

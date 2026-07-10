@@ -66,8 +66,13 @@ struct LatencyReport {
 struct BrowserReport {
     kind: String,
     path: String,
+    headless_shell: bool,
     steps: Vec<StepResult>,
     latency: Option<LatencyReport>,
+    /// Resident memory of the browser's full process tree (root + renderer/
+    /// GPU/utility children) while the page was loaded (doctor-cli spec:
+    /// "Process-tree memory measurement").
+    tree_rss_mb: Option<f64>,
     passed: bool,
 }
 
@@ -77,14 +82,25 @@ struct DoctorReport {
     browsers: Vec<BrowserReport>,
 }
 
-pub async fn run(json: bool, headless: bool) -> std::process::ExitCode {
-    let discovered = match launch::discover_browsers() {
+pub async fn run(json: bool, headless: bool, installed_only: bool) -> std::process::ExitCode {
+    let mut discovered = match launch::discover_browsers() {
         Ok(list) => list,
         Err(e) => {
             report_discovery_failure(json, &e);
             return std::process::ExitCode::FAILURE;
         }
     };
+
+    // The managed headless-shell is checked as an additional entry (headless
+    // runs only — the shell has no headed mode), so its tree_rss_mb can be
+    // compared directly against the installed browsers'.
+    if headless && !installed_only {
+        match launch::resolve_headless_browser(launch::BrowserPreference::Auto).await {
+            Ok(shell) if shell.is_headless_shell => discovered.insert(0, shell),
+            Ok(_) => {} // fell back to installed — already in the list
+            Err(e) => tracing::warn!(error = %e, "doctor: headless-shell unavailable"),
+        }
+    }
 
     let mut browsers = Vec::with_capacity(discovered.len());
     for browser in &discovered {
@@ -124,7 +140,11 @@ fn report_discovery_failure(json: bool, error: &cdp::CdpError) {
 
 async fn check_browser(discovered: &DiscoveredBrowser, headless: bool) -> BrowserReport {
     let kind_label = discovered.kind.label();
-    let profile_name = format!("doctor-{}", kind_label.to_lowercase());
+    let profile_name = if discovered.is_headless_shell {
+        "doctor-shell".to_string()
+    } else {
+        format!("doctor-{}", kind_label.to_lowercase())
+    };
     let mut steps = Vec::new();
 
     let (launch_result, dur) = time(launch::launch(discovered, &profile_name, headless)).await;
@@ -146,31 +166,78 @@ async fn check_browser(discovered: &DiscoveredBrowser, headless: bool) -> Browse
             ] {
                 steps.push(StepResult::skipped(name));
             }
-            return finish(discovered, steps, None);
+            return finish(discovered, steps, None, None);
         }
     };
 
     let ws_url = launched.ws_url.clone();
-    let (functional_steps, latency) = run_functional_steps(&ws_url).await;
+    let root_pid = launched.pid();
+    let (functional_steps, latency, tree_rss_mb) = run_functional_steps(&ws_url, root_pid).await;
     steps.extend(functional_steps);
     shutdown(launched).await;
 
-    finish(discovered, steps, latency)
+    finish(discovered, steps, latency, tree_rss_mb)
 }
 
 fn finish(
     discovered: &DiscoveredBrowser,
     steps: Vec<StepResult>,
     latency: Option<LatencyReport>,
+    tree_rss_mb: Option<f64>,
 ) -> BrowserReport {
     let passed = steps.iter().all(StepResult::is_ok);
     BrowserReport {
         kind: discovered.kind.label().to_string(),
         path: discovered.path.display().to_string(),
+        headless_shell: discovered.is_headless_shell,
         steps,
         latency,
+        tree_rss_mb,
         passed,
     }
+}
+
+/// Sums resident memory of `root_pid` and all its descendants, in MB.
+fn measure_tree_rss_mb(root_pid: u32) -> Option<f64> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+
+    let mut sys = System::new();
+    // `.without_tasks()`: sysinfo's default includes each thread as a
+    // separate "process" on Linux (threads share the process PID
+    // namespace via /proc/[pid]/task/[tid]), and every such entry reports
+    // the *whole process's* RSS — summing them multiplies the real total
+    // by the thread count (~14x observed on a real Chromium tree).
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().with_memory().without_tasks(),
+    );
+
+    let root = Pid::from_u32(root_pid);
+    let mut children_of: std::collections::HashMap<Pid, Vec<Pid>> =
+        std::collections::HashMap::new();
+    for (pid, proc_) in sys.processes() {
+        if let Some(parent) = proc_.parent() {
+            children_of.entry(parent).or_default().push(*pid);
+        }
+    }
+
+    sys.process(root)?;
+    let mut total_bytes: u64 = 0;
+    let mut visited: std::collections::HashSet<Pid> = std::collections::HashSet::new();
+    let mut stack = vec![root];
+    while let Some(pid) = stack.pop() {
+        if !visited.insert(pid) {
+            continue;
+        }
+        if let Some(proc_) = sys.process(pid) {
+            total_bytes += proc_.memory();
+        }
+        if let Some(kids) = children_of.get(&pid) {
+            stack.extend(kids.iter().copied());
+        }
+    }
+    Some(total_bytes as f64 / 1024.0 / 1024.0)
 }
 
 async fn shutdown(launched: LaunchedBrowser) {
@@ -183,7 +250,10 @@ async fn shutdown(launched: LaunchedBrowser) {
 /// skipping (not aborting the whole run) whatever comes after the first
 /// failure — matching "failures MUST NOT abort checks for other browsers"
 /// at the step level too.
-async fn run_functional_steps(ws_url: &str) -> (Vec<StepResult>, Option<LatencyReport>) {
+async fn run_functional_steps(
+    ws_url: &str,
+    root_pid: Option<u32>,
+) -> (Vec<StepResult>, Option<LatencyReport>, Option<f64>) {
     let mut steps = Vec::new();
 
     let (connect_result, dur) = time(Browser::connect(ws_url)).await;
@@ -205,7 +275,7 @@ async fn run_functional_steps(ws_url: &str) -> (Vec<StepResult>, Option<LatencyR
                     "teardown",
                 ],
             );
-            return (steps, None);
+            return (steps, None, None);
         }
     };
 
@@ -227,7 +297,7 @@ async fn run_functional_steps(ws_url: &str) -> (Vec<StepResult>, Option<LatencyR
                     "teardown",
                 ],
             );
-            return (steps, None);
+            return (steps, None, None);
         }
     };
 
@@ -244,16 +314,19 @@ async fn run_functional_steps(ws_url: &str) -> (Vec<StepResult>, Option<LatencyR
                 &["navigate", "evaluate", "screenshot", "teardown"],
             );
             let _ = context.dispose().await;
-            return (steps, None);
+            return (steps, None, None);
         }
     };
 
     let (nav_result, dur) =
         time(page.navigate_and_wait("https://example.com", Duration::from_secs(15))).await;
     let mut latency = None;
+    let mut tree_rss_mb = None;
     match nav_result {
         Ok(()) => {
             steps.push(StepResult::passed("navigate", dur));
+
+            tree_rss_mb = root_pid.and_then(measure_tree_rss_mb);
 
             let (eval_result, dur) = time(page.evaluate("document.title")).await;
             match eval_result {
@@ -287,7 +360,7 @@ async fn run_functional_steps(ws_url: &str) -> (Vec<StepResult>, Option<LatencyR
     }
     let _ = context.dispose().await;
 
-    (steps, latency)
+    (steps, latency, tree_rss_mb)
 }
 
 fn skip_rest(steps: &mut Vec<StepResult>, names: &[&str]) {
@@ -339,7 +412,12 @@ where
 
 fn print_text_report(report: &DoctorReport) {
     for browser in &report.browsers {
-        println!("== {} ({}) ==", browser.kind, browser.path);
+        let shell_tag = if browser.headless_shell {
+            " [headless-shell]"
+        } else {
+            ""
+        };
+        println!("== {}{shell_tag} ({}) ==", browser.kind, browser.path);
         for step in &browser.steps {
             let mark = match &step.status {
                 StepStatus::Passed => "✓",
@@ -364,6 +442,9 @@ fn print_text_report(report: &DoctorReport) {
             if let Some(warning) = &latency.warning {
                 println!("  ⚠ {warning}");
             }
+        }
+        if let Some(rss) = browser.tree_rss_mb {
+            println!("  tree memory: {rss:.1} MB (browser + all child processes)");
         }
         println!("  result: {}", if browser.passed { "PASS" } else { "FAIL" });
         println!();

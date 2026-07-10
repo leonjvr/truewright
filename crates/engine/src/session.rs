@@ -43,12 +43,27 @@ struct Coordinates {
 }
 
 impl Session {
-    /// Discovers and launches an installed Chromium browser, then opens one
-    /// context and one blank page (page-snapshot / browser-actions specs'
-    /// prerequisite state).
+    /// Launches a browser and opens one context and one blank page
+    /// (page-snapshot / browser-actions specs' prerequisite state).
+    /// Headless sessions resolve the browser per `pref` (managed
+    /// headless-shell by default, installed browser as fallback/opt-out);
+    /// headed sessions always use the installed browser.
     pub async fn launch(profile_name: &str, headless: bool) -> Result<Self> {
-        let discovered = cdp::launch::discover_browsers()?;
-        let launched = cdp::launch::launch(&discovered[0], profile_name, headless).await?;
+        Self::launch_with(profile_name, headless, cdp::launch::BrowserPreference::Auto).await
+    }
+
+    pub async fn launch_with(
+        profile_name: &str,
+        headless: bool,
+        pref: cdp::launch::BrowserPreference,
+    ) -> Result<Self> {
+        let discovered = if headless {
+            cdp::launch::resolve_headless_browser(pref).await?
+        } else {
+            let mut found = cdp::launch::discover_browsers()?;
+            found.remove(0)
+        };
+        let launched = cdp::launch::launch(&discovered, profile_name, headless).await?;
 
         let browser = cdp::ops::Browser::connect(&launched.ws_url).await?;
         let context = browser.new_context().await?;

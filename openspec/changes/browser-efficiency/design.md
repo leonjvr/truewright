@@ -33,3 +33,12 @@ Additive. Existing behavior reachable via `--browser installed`. No rollback con
 ## Open Questions
 
 None blocking; checksum verification and proxy support noted as future hardening.
+
+## Addendum: bugs found during implementation
+
+Two real bugs surfaced only by actually running `tree_rss_mb` in the Docker container (not by writing code that compiles) — worth recording since they're exactly the class of thing that stays invisible without genuine verification:
+
+1. **`sysinfo::System::refresh_processes()` defaults to `.with_tasks()`, which on Linux enumerates each thread as a pseudo-process** (threads share the process PID namespace via `/proc/[pid]/task/[tid]`), and every such "process" entry reports the *whole process's* RSS. Summing a tree walk over these multiplied real memory by the live thread count — observed as ~13 GB reported for a ~900 MB real Chromium tree (~14×, confirmed against `ps aux`). Fixed by using `refresh_processes_specifics(..., ProcessRefreshKind::nothing().with_memory().without_tasks())` instead of the convenience wrapper.
+2. **Orphaned renderer/GPU/utility processes survive a killed browser inside a container with no real init/reaper** — exactly the "Zombie Processes" failure mode `.research/High Performance Browser Automation.md` named explicitly. `LaunchedBrowser::shutdown`/`Drop` previously only killed the root process; `tokio::process::Child::kill()` doesn't cascade to reparented descendants without a process group. Fixed by `setsid()`-ing the browser at launch (Unix only, via `pre_exec`) so it becomes its own session/process-group leader, then sending `SIGKILL` to the negative PID (the whole group) on teardown.
+
+Neither bug affected Windows (the thread-enumeration issue is Linux-specific; Windows process teardown already worked via `TerminateProcess`/`start_kill` since Windows doesn't have the same reparenting-to-orphan behavior in the same way).

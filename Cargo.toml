@@ -20,6 +20,9 @@ dashmap = "6"
 clap = { version = "4", features = ["derive"] }
 base64 = "0.22"
 rmcp = { version = "2", features = ["server", "macros", "transport-io"] }
+ureq = { version = "3", features = ["json"] }
+zip = { version = "6", default-features = false, features = ["deflate"] }
+sysinfo = "0.37"
 
 [package]
 name = "aib"
@@ -41,3 +44,4 @@ serde_json.workspace = true
 cdp = { path = "crates/cdp" }
 mcp-server = { path = "crates/mcp" }
 rmcp.workspace = true
+sysinfo.workspace = true

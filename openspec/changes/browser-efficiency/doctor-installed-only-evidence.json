@@ -1,0 +1,115 @@
+{
+  "ok": true,
+  "browsers": [
+    {
+      "kind": "Chrome",
+      "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "headless_shell": false,
+      "steps": [
+        {
+          "name": "launch",
+          "status": "passed",
+          "duration_ms": 584.8763
+        },
+        {
+          "name": "connect",
+          "status": "passed",
+          "duration_ms": 153.729
+        },
+        {
+          "name": "create_context",
+          "status": "passed",
+          "duration_ms": 45.9792
+        },
+        {
+          "name": "create_page",
+          "status": "passed",
+          "duration_ms": 289.7618
+        },
+        {
+          "name": "navigate",
+          "status": "passed",
+          "duration_ms": 122.5509
+        },
+        {
+          "name": "evaluate",
+          "status": "passed",
+          "duration_ms": 9.027000000000001
+        },
+        {
+          "name": "screenshot",
+          "status": "passed",
+          "duration_ms": 34.2682
+        },
+        {
+          "name": "teardown",
+          "status": "passed",
+          "duration_ms": 0.9169999999999999
+        }
+      ],
+      "latency": {
+        "samples": 100,
+        "p50_ms": 1.3315,
+        "p95_ms": 4.3187,
+        "warning": null
+      },
+      "tree_rss_mb": 458.625,
+      "passed": true
+    },
+    {
+      "kind": "Edge",
+      "path": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "headless_shell": false,
+      "steps": [
+        {
+          "name": "launch",
+          "status": "passed",
+          "duration_ms": 724.2211
+        },
+        {
+          "name": "connect",
+          "status": "passed",
+          "duration_ms": 299.2769
+        },
+        {
+          "name": "create_context",
+          "status": "passed",
+          "duration_ms": 67.6118
+        },
+        {
+          "name": "create_page",
+          "status": "passed",
+          "duration_ms": 544.6474999999999
+        },
+        {
+          "name": "navigate",
+          "status": "passed",
+          "duration_ms": 141.88029999999998
+        },
+        {
+          "name": "evaluate",
+          "status": "passed",
+          "duration_ms": 2.5599
+        },
+        {
+          "name": "screenshot",
+          "status": "passed",
+          "duration_ms": 30.179100000000002
+        },
+        {
+          "name": "teardown",
+          "status": "passed",
+          "duration_ms": 0.5005
+        }
+      ],
+      "latency": {
+        "samples": 100,
+        "p50_ms": 1.6742000000000001,
+        "p95_ms": 4.593500000000001,
+        "warning": null
+      },
+      "tree_rss_mb": 1551.75,
+      "passed": true
+    }
+  ]
+}

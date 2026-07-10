@@ -1,0 +1,170 @@
+{
+  "ok": true,
+  "browsers": [
+    {
+      "kind": "Chrome",
+      "path": "C:\\Users\\leon\\AppData\\Local\\aib\\browsers\\150.0.7871.115\\chrome-headless-shell-win64\\chrome-headless-shell.exe",
+      "headless_shell": true,
+      "steps": [
+        {
+          "name": "launch",
+          "status": "passed",
+          "duration_ms": 452.3827
+        },
+        {
+          "name": "connect",
+          "status": "passed",
+          "duration_ms": 3.7937000000000003
+        },
+        {
+          "name": "create_context",
+          "status": "passed",
+          "duration_ms": 1.8533
+        },
+        {
+          "name": "create_page",
+          "status": "passed",
+          "duration_ms": 699.8425000000001
+        },
+        {
+          "name": "navigate",
+          "status": "passed",
+          "duration_ms": 2781.8592
+        },
+        {
+          "name": "evaluate",
+          "status": "passed",
+          "duration_ms": 1.7006000000000001
+        },
+        {
+          "name": "screenshot",
+          "status": "passed",
+          "duration_ms": 38.5946
+        },
+        {
+          "name": "teardown",
+          "status": "passed",
+          "duration_ms": 0.6057
+        }
+      ],
+      "latency": {
+        "samples": 100,
+        "p50_ms": 0.8442999999999999,
+        "p95_ms": 1.0891,
+        "warning": null
+      },
+      "tree_rss_mb": 172.00390625,
+      "passed": true
+    },
+    {
+      "kind": "Chrome",
+      "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "headless_shell": false,
+      "steps": [
+        {
+          "name": "launch",
+          "status": "passed",
+          "duration_ms": 675.5307
+        },
+        {
+          "name": "connect",
+          "status": "passed",
+          "duration_ms": 96.95700000000001
+        },
+        {
+          "name": "create_context",
+          "status": "passed",
+          "duration_ms": 26.1543
+        },
+        {
+          "name": "create_page",
+          "status": "passed",
+          "duration_ms": 445.509
+        },
+        {
+          "name": "navigate",
+          "status": "passed",
+          "duration_ms": 121.3361
+        },
+        {
+          "name": "evaluate",
+          "status": "passed",
+          "duration_ms": 1.2931
+        },
+        {
+          "name": "screenshot",
+          "status": "passed",
+          "duration_ms": 27.5792
+        },
+        {
+          "name": "teardown",
+          "status": "passed",
+          "duration_ms": 0.6095
+        }
+      ],
+      "latency": {
+        "samples": 100,
+        "p50_ms": 1.0421,
+        "p95_ms": 3.3008,
+        "warning": null
+      },
+      "tree_rss_mb": 484.59375,
+      "passed": true
+    },
+    {
+      "kind": "Edge",
+      "path": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "headless_shell": false,
+      "steps": [
+        {
+          "name": "launch",
+          "status": "passed",
+          "duration_ms": 681.6275
+        },
+        {
+          "name": "connect",
+          "status": "passed",
+          "duration_ms": 351.4162
+        },
+        {
+          "name": "create_context",
+          "status": "passed",
+          "duration_ms": 26.451800000000002
+        },
+        {
+          "name": "create_page",
+          "status": "passed",
+          "duration_ms": 282.99780000000004
+        },
+        {
+          "name": "navigate",
+          "status": "passed",
+          "duration_ms": 94.5705
+        },
+        {
+          "name": "evaluate",
+          "status": "passed",
+          "duration_ms": 2.7922
+        },
+        {
+          "name": "screenshot",
+          "status": "passed",
+          "duration_ms": 31.0694
+        },
+        {
+          "name": "teardown",
+          "status": "passed",
+          "duration_ms": 0.6708000000000001
+        }
+      ],
+      "latency": {
+        "samples": 100,
+        "p50_ms": 1.2849000000000002,
+        "p95_ms": 5.9782,
+        "warning": null
+      },
+      "tree_rss_mb": 470.37109375,
+      "passed": true
+    }
+  ]
+}

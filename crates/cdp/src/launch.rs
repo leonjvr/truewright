@@ -37,6 +37,23 @@ impl BrowserKind {
 pub struct DiscoveredBrowser {
     pub kind: BrowserKind,
     pub path: PathBuf,
+    /// True when this is a managed `chrome-headless-shell` binary rather
+    /// than an installed full browser. The shell is headless-only, so
+    /// launch skips the `--headless=new` flag for it.
+    pub is_headless_shell: bool,
+}
+
+/// Which browser binary headless sessions should use (browser-attach spec:
+/// "Managed chrome-headless-shell for headless runs").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BrowserPreference {
+    /// Prefer a cached/downloadable `chrome-headless-shell` for headless
+    /// runs; fall back to the installed browser. Headed runs always use
+    /// the installed browser.
+    #[default]
+    Auto,
+    /// Always use the installed browser; never resolve or download a shell.
+    Installed,
 }
 
 /// Discover installed Chrome/Edge (browser-attach spec: "Discover installed
@@ -52,7 +69,11 @@ pub fn discover_browsers() -> Result<Vec<DiscoveredBrowser>> {
 
     for kind in [BrowserKind::Chrome, BrowserKind::Edge] {
         if let Some(path) = find_browser(kind, &mut checked) {
-            found.push(DiscoveredBrowser { kind, path });
+            found.push(DiscoveredBrowser {
+                kind,
+                path,
+                is_headless_shell: false,
+            });
         }
     }
 
@@ -62,6 +83,28 @@ pub fn discover_browsers() -> Result<Vec<DiscoveredBrowser>> {
         });
     }
     Ok(found)
+}
+
+/// Picks the binary for a headless session (browser-attach spec: "Managed
+/// chrome-headless-shell for headless runs"): cached shell → downloaded
+/// shell → installed browser, unless the caller opted out with
+/// [`BrowserPreference::Installed`]. Failures on the shell path degrade to
+/// the installed browser with a warning, never a hard error.
+#[allow(clippy::result_large_err)]
+pub async fn resolve_headless_browser(pref: BrowserPreference) -> Result<DiscoveredBrowser> {
+    if pref == BrowserPreference::Auto {
+        if let Some(shell) = crate::download::cached_shell() {
+            return Ok(shell);
+        }
+        match crate::download::ensure_shell().await {
+            Ok(shell) => return Ok(shell),
+            Err(e) => {
+                tracing::warn!(error = %e, "chrome-headless-shell unavailable; falling back to installed browser");
+            }
+        }
+    }
+    let mut found = discover_browsers()?;
+    Ok(found.remove(0))
 }
 
 fn find_browser(kind: BrowserKind, checked: &mut Vec<String>) -> Option<PathBuf> {
@@ -160,7 +203,7 @@ fn well_known_paths(kind: BrowserKind) -> Vec<PathBuf> {
 /// `$XDG_DATA_HOME` (falling back to `~/.local/share`) on Linux
 /// (browser-attach spec: "Launch with an isolated profile").
 #[allow(clippy::result_large_err)]
-fn profile_base_dir() -> Result<PathBuf> {
+pub(crate) fn profile_base_dir() -> Result<PathBuf> {
     #[cfg(windows)]
     {
         std::env::var_os("LOCALAPPDATA")
@@ -239,8 +282,33 @@ pub async fn launch(
     if running_as_root() {
         cmd.arg("--no-sandbox");
     }
+    // Put the browser in its own session/process group (browser-attach
+    // spec: "Clean teardown" — orphaned renderer/GPU/utility children).
+    // Without a real init/reaper (e.g. inside a bare container), a killed
+    // browser's zygote-forked descendants can be reparented and survive
+    // indefinitely instead of dying with their parent; killing the whole
+    // group in `shutdown`/`Drop` closes that gap.
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
     if headless {
-        cmd.arg("--headless=new");
+        // Reduced-footprint flag set (browser-attach spec: "Reduced-footprint
+        // headless launch flags"). Never applied headed — --disable-gpu in
+        // particular would degrade a visible window.
+        cmd.arg("--disable-dev-shm-usage")
+            .arg("--disable-software-rasterizer")
+            .arg("--disable-extensions")
+            .arg("--mute-audio")
+            .arg("--disable-gpu");
+        // chrome-headless-shell is headless-only; the mode flag is for full
+        // Chrome binaries.
+        if !browser.is_headless_shell {
+            cmd.arg("--headless=new");
+        }
     }
 
     let child = cmd
@@ -293,10 +361,22 @@ impl LaunchedBrowser {
         self.child.is_some()
     }
 
+    /// OS process id of the launched browser root, when we launched it.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.as_ref().and_then(|c| c.id())
+    }
+
     /// Terminates the browser process if we launched it; a no-op otherwise
-    /// (browser-attach spec: "Clean teardown").
+    /// (browser-attach spec: "Clean teardown"). On Unix this kills the
+    /// whole process group (see `launch`'s `setsid` call), so
+    /// zygote-forked renderer/GPU/utility children die too instead of
+    /// surviving as orphans.
     pub async fn shutdown(mut self) -> Result<()> {
         if let Some(mut child) = self.child.take() {
+            #[cfg(unix)]
+            if let Some(pid) = child.id() {
+                kill_process_group(pid);
+            }
             let _ = child.kill().await;
             let _ = child.wait().await;
         }
@@ -312,8 +392,22 @@ impl Drop for LaunchedBrowser {
     /// primary path — it also `.wait()`s to reap the process.
     fn drop(&mut self) {
         if let Some(child) = self.child.as_mut() {
+            #[cfg(unix)]
+            if let Some(pid) = child.id() {
+                kill_process_group(pid);
+            }
             let _ = child.start_kill();
         }
+    }
+}
+
+/// Sends `SIGKILL` to the whole process group led by `pid` (i.e. `kill(-pid,
+/// SIGKILL)`), relying on `launch`'s `setsid()` call having made `pid` both
+/// the process id and the process group id.
+#[cfg(unix)]
+fn kill_process_group(pid: u32) {
+    unsafe {
+        libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
     }
 }
 

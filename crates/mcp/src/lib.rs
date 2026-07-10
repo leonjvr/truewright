@@ -52,6 +52,7 @@ const DEFAULT_WAIT_FOR_MS: u64 = 5000;
 pub struct AibTools {
     session: Arc<Mutex<Option<engine::Session>>>,
     headless: bool,
+    browser_pref: cdp::launch::BrowserPreference,
     // Read by the `#[tool_handler]`-generated `ServerHandler` impl to route
     // incoming `tools/call` requests to the methods below.
     #[allow(dead_code)]
@@ -61,9 +62,14 @@ pub struct AibTools {
 #[tool_router]
 impl AibTools {
     pub fn new(headless: bool) -> Self {
+        Self::with_browser_pref(headless, cdp::launch::BrowserPreference::Auto)
+    }
+
+    pub fn with_browser_pref(headless: bool, browser_pref: cdp::launch::BrowserPreference) -> Self {
         Self {
             session: Arc::new(Mutex::new(None)),
             headless,
+            browser_pref,
             tool_router: Self::tool_router(),
         }
     }
@@ -71,7 +77,7 @@ impl AibTools {
     async fn ensure_session(&self) -> Result<(), McpError> {
         let mut guard = self.session.lock().await;
         if guard.is_none() {
-            let session = engine::Session::launch("aib-mcp", self.headless)
+            let session = engine::Session::launch_with("aib-mcp", self.headless, self.browser_pref)
                 .await
                 .map_err(map_engine_err)?;
             *guard = Some(session);

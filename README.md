@@ -10,15 +10,17 @@ An LLM-first browser-testing engine: a single Rust binary that drives your insta
 
 - **Phase 0 (CDP spike) — done.** A minimal hand-rolled CDP client (`crates/cdp`) attaches to installed Chrome/Edge, creates an isolated browser context and page, navigates, evaluates JS, and captures a screenshot — all with typed commands over a flatten-session WebSocket connection.
 - **Phase 1 (agent MVP) — done.** `crates/engine` adds a session layer with an injected DOM/ARIA walker (token-efficient, ref-addressable snapshots), bounded-poll actionability, and click/type/press/wait_for/screenshot. `crates/mcp` + `aib mcp` expose it all as a stdio MCP server (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_press`, `browser_wait_for`, `browser_screenshot`, `browser_close`), verified end-to-end against a real page. This is a scoped-down slice of PROPOSAL.md's full vision — see `openspec/changes/archive/*-phase-1-agent-mvp/design.md` for exactly what's deferred (isolated-world injection, MutationObserver-driven actionability, human motion, multi-session daemon).
-- **Next: browser efficiency + screencast capture** (re-prioritized 2026-07-11 after the external-research review in `.research/REVIEW.md`): memory-reduction launch flags and auto-downloaded `chrome-headless-shell` for headless runs, then `Page.startScreencast`-based video recording (`browser_record_start`/`browser_record_stop`). The human-motion engine (original Phase 2) follows after those.
+- **Browser efficiency — done.** Headless launches get memory-reduction flags and an auto-downloaded, cached `chrome-headless-shell` (installed-browser fallback; `--browser installed` opt-out); `aib doctor` reports full process-tree memory per browser. Measured: headless-shell ~170–350 MB vs installed Chrome/Edge headless ~450–1550 MB for the same page, on both Windows and Linux.
+- **Next: screencast capture** (re-prioritized 2026-07-11 after the external-research review in `.research/REVIEW.md`): `Page.startScreencast`-based video recording (`browser_record_start`/`browser_record_stop`). The human-motion engine (original Phase 2) follows after that.
 
 ## MCP server
 
 Configure `aib mcp` as a stdio MCP server in an agent host (e.g. Claude Code, Claude Desktop). It lazily launches a browser on the first tool call and exposes: `browser_navigate(url)`, `browser_snapshot()`, `browser_click(ref)`, `browser_type(ref, text, submit?)`, `browser_press(key)`, `browser_wait_for(text, timeout_ms?)`, `browser_screenshot()`, `browser_close()`. Refs come from the snapshot text (e.g. `[e6]`).
 
 ```
-aib mcp            # headless
-aib mcp --headed   # show the browser window
+aib mcp                        # headless, managed chrome-headless-shell (auto-downloaded/cached)
+aib mcp --headed                # show the browser window (installed browser)
+aib mcp --browser installed     # headless, but always the installed browser (no shell download)
 ```
 
 ## Building
@@ -31,15 +33,20 @@ Produces `target/release/aib.exe`.
 
 ## `aib doctor`
 
-Runs the full attach→navigate→evaluate→screenshot→teardown cycle against every installed Chromium browser (Chrome, Edge) and reports command round-trip latency:
+Runs the full attach→navigate→evaluate→screenshot→teardown cycle against every installed Chromium browser plus the managed headless-shell (headless runs), and reports command round-trip latency and process-tree memory (`tree_rss_mb`):
 
 ```
-aib doctor            # human-readable report, headless browsers
-aib doctor --headed   # show the browser windows
-aib doctor --json     # machine-readable report for CI
+aib doctor                     # human-readable report; shell + installed browsers, headless
+aib doctor --headed            # show the browser windows (installed browsers only — shell is headless-only)
+aib doctor --browser installed # skip the managed shell, installed browsers only
+aib doctor --json              # machine-readable report for CI
 ```
 
-Exits non-zero if any step fails on any browser. See `openspec/specs/doctor-cli/spec.md` for the full spec and `openspec/changes/archive/*-phase-0-cdp-spike/doctor-evidence.json` for a recorded passing run (both browsers, p50 < 5ms).
+Exits non-zero if any step fails on any browser. See `openspec/specs/doctor-cli/spec.md` and `openspec/specs/browser-attach/spec.md` for the full specs, and `openspec/changes/archive/*-browser-efficiency/` for recorded memory-comparison evidence.
+
+### Managed `chrome-headless-shell`
+
+Headless runs auto-download and cache the stripped, headless-only `chrome-headless-shell` binary (from Chrome for Testing) on first use — a deliberate, documented exception to the "no downloads" principle, made because the browser binary, not the driver, dominates memory cost (see `.research/REVIEW.md`). It's cached under `<data-dir>/aib/browsers/<version>/` and reused offline afterwards; if resolution or download fails, `aib` falls back to the installed browser automatically. Headed runs, and `--browser installed`, always use the installed browser and never touch the network.
 
 ## Testing in Docker
 

@@ -1,0 +1,60 @@
+      "tree_rss_mb": 344.00390625,
+      "passed": true
+    },
+    {
+      "kind": "Chrome",
+      "path": "/usr/bin/chromium",
+      "headless_shell": false,
+      "steps": [
+        {
+          "name": "launch",
+          "status": "passed",
+          "duration_ms": 409.747336
+        },
+        {
+          "name": "connect",
+          "status": "passed",
+          "duration_ms": 100.962327
+        },
+        {
+          "name": "create_context",
+          "status": "passed",
+          "duration_ms": 36.727477
+        },
+        {
+          "name": "create_page",
+          "status": "passed",
+          "duration_ms": 407.202513
+        },
+        {
+          "name": "navigate",
+          "status": "passed",
+          "duration_ms": 129.446726
+        },
+        {
+          "name": "evaluate",
+          "status": "passed",
+          "duration_ms": 18.109704
+        },
+        {
+          "name": "screenshot",
+          "status": "passed",
+          "duration_ms": 87.64999800000001
+        },
+        {
+          "name": "teardown",
+          "status": "passed",
+          "duration_ms": 1.599771
+        }
+      ],
+      "latency": {
+        "samples": 100,
+        "p50_ms": 3.9255640000000005,
+        "p95_ms": 13.277979,
+        "warning": null
+      },
+      "tree_rss_mb": 837.0390625,
+      "passed": true
+    }
+  ]
+}
