@@ -5,7 +5,7 @@
 use crate::connection::Connection;
 use crate::error::{CdpError, Result};
 use crate::launch::{self, BrowserKind, DiscoveredBrowser, LaunchedBrowser};
-use crate::protocol::{browser, page, runtime, target};
+use crate::protocol::{browser, input, page, runtime, target};
 use crate::session::{EventItem, Session};
 use base64::Engine;
 use std::time::Duration;
@@ -167,6 +167,54 @@ impl Page {
                 target_id: self.target_id.clone(),
             })
             .await?;
+        Ok(())
+    }
+
+    /// Left-clicks at viewport coordinates (press + release), for the
+    /// `engine` crate's ref-resolved actions.
+    pub async fn click_at(&self, x: f64, y: f64) -> Result<()> {
+        for kind in ["mousePressed", "mouseReleased"] {
+            self.session
+                .execute::<input::DispatchMouseEvent>(input::DispatchMouseEventParams {
+                    kind: kind.to_string(),
+                    x,
+                    y,
+                    button: Some("left".to_string()),
+                    click_count: Some(1),
+                })
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Inserts text into whatever element currently has focus.
+    pub async fn insert_text(&self, text: &str) -> Result<()> {
+        self.session
+            .execute::<input::InsertText>(input::InsertTextParams {
+                text: text.to_string(),
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Dispatches a keyDown/keyUp pair for a named key.
+    pub async fn dispatch_key(
+        &self,
+        key: &str,
+        code: &str,
+        windows_virtual_key_code: i64,
+    ) -> Result<()> {
+        for kind in ["keyDown", "keyUp"] {
+            self.session
+                .execute::<input::DispatchKeyEvent>(input::DispatchKeyEventParams {
+                    kind: kind.to_string(),
+                    key: Some(key.to_string()),
+                    code: Some(code.to_string()),
+                    windows_virtual_key_code: Some(windows_virtual_key_code),
+                    text: None,
+                })
+                .await?;
+        }
         Ok(())
     }
 }

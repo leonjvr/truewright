@@ -1,0 +1,188 @@
+use crate::error::{EngineError, Result};
+use crate::keys;
+use crate::snapshot::{self, SnapshotResult};
+use serde::Deserialize;
+use std::time::{Duration, Instant};
+
+const RESOLVE_JS: &str = include_str!("../assets/resolve.js");
+
+const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_ACTION_TIMEOUT: Duration = Duration::from_secs(5);
+const ACTIONABILITY_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const WAIT_FOR_POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// Two resolutions closer than this (px) count as "stable" (browser-actions
+/// spec: "Bounded-poll actionability before acting").
+const STABLE_EPSILON_PX: f64 = 0.5;
+
+/// One browser session: one browser, one context, one page — the Phase 1
+/// scope (design.md Decision #1: no daemon, no multi-session yet).
+pub struct Session {
+    launched: Option<cdp::launch::LaunchedBrowser>,
+    context: cdp::ops::BrowserContext,
+    page: cdp::ops::Page,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolveResult {
+    ok: bool,
+    #[serde(default)]
+    visible: bool,
+    #[serde(default)]
+    x: f64,
+    #[serde(default)]
+    y: f64,
+    #[serde(default)]
+    width: f64,
+    #[serde(default)]
+    height: f64,
+}
+
+struct Coordinates {
+    x: f64,
+    y: f64,
+}
+
+impl Session {
+    /// Discovers and launches an installed Chromium browser, then opens one
+    /// context and one blank page (page-snapshot / browser-actions specs'
+    /// prerequisite state).
+    pub async fn launch(profile_name: &str, headless: bool) -> Result<Self> {
+        let discovered = cdp::launch::discover_browsers()?;
+        let launched = cdp::launch::launch(&discovered[0], profile_name, headless).await?;
+
+        let browser = cdp::ops::Browser::connect(&launched.ws_url).await?;
+        let context = browser.new_context().await?;
+        let page = context.new_page("about:blank").await?;
+
+        Ok(Self {
+            launched: Some(launched),
+            context,
+            page,
+        })
+    }
+
+    pub async fn navigate(&self, url: &str) -> Result<String> {
+        self.page.navigate_and_wait(url, NAVIGATE_TIMEOUT).await?;
+        self.snapshot().await
+    }
+
+    /// Evaluates the injected walker and renders its tree as text
+    /// (page-snapshot spec: "Injected accessibility-style walker").
+    pub async fn snapshot(&self) -> Result<String> {
+        let raw = self.page.evaluate(snapshot::WALKER_JS).await?;
+        let parsed: SnapshotResult = serde_json::from_value(raw)?;
+        Ok(snapshot::render(&parsed))
+    }
+
+    pub async fn click(&self, r#ref: &str) -> Result<()> {
+        let coords = self
+            .resolve_actionable(r#ref, DEFAULT_ACTION_TIMEOUT)
+            .await?;
+        self.page.click_at(coords.x, coords.y).await?;
+        Ok(())
+    }
+
+    /// Clicks to focus, then inserts text (browser-actions spec: "Type by
+    /// ref"). `submit` additionally presses Enter afterward.
+    pub async fn type_text(&self, r#ref: &str, text: &str, submit: bool) -> Result<()> {
+        self.click(r#ref).await?;
+        self.page.insert_text(text).await?;
+        if submit {
+            self.press("Enter").await?;
+        }
+        Ok(())
+    }
+
+    pub async fn press(&self, key: &str) -> Result<()> {
+        let spec = keys::lookup(key).ok_or_else(|| EngineError::UnknownKey(key.to_string()))?;
+        self.page
+            .dispatch_key(spec.key, spec.code, spec.windows_virtual_key_code)
+            .await?;
+        Ok(())
+    }
+
+    /// Polls the rendered snapshot for a substring (browser-actions spec:
+    /// "Wait for text").
+    pub async fn wait_for(&self, text: &str, timeout: Duration) -> Result<String> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let snap = self.snapshot().await?;
+            if snap.contains(text) {
+                return Ok(snap);
+            }
+            if Instant::now() >= deadline {
+                return Err(EngineError::WaitTimeout {
+                    text: text.to_string(),
+                    timeout,
+                });
+            }
+            tokio::time::sleep(WAIT_FOR_POLL_INTERVAL).await;
+        }
+    }
+
+    pub async fn screenshot(&self) -> Result<Vec<u8>> {
+        Ok(self.page.screenshot().await?)
+    }
+
+    /// Tears the session down: page, context, and (if we launched it) the
+    /// browser process.
+    pub async fn close(mut self) -> Result<()> {
+        let _ = self.page.close().await;
+        let _ = self.context.dispose().await;
+        if let Some(launched) = self.launched.take() {
+            launched.shutdown().await?;
+        }
+        Ok(())
+    }
+
+    async fn resolve_ref(&self, r#ref: &str) -> Result<ResolveResult> {
+        let script = format!("({RESOLVE_JS})({})", serde_json::to_string(r#ref)?);
+        let raw = self.page.evaluate(&script).await?;
+        Ok(serde_json::from_value(raw)?)
+    }
+
+    /// Bounded-poll actionability gate: resolve until visible and stable
+    /// across two consecutive reads, or time out (browser-actions spec).
+    async fn resolve_actionable(&self, r#ref: &str, timeout: Duration) -> Result<Coordinates> {
+        let deadline = Instant::now() + timeout;
+        let mut last: Option<(f64, f64, f64, f64)> = None;
+
+        loop {
+            let resolved = self.resolve_ref(r#ref).await?;
+            if !resolved.ok {
+                return Err(EngineError::StaleRef(r#ref.to_string()));
+            }
+
+            if resolved.visible {
+                let current = (resolved.x, resolved.y, resolved.width, resolved.height);
+                if let Some(prev) = last {
+                    if rects_close(prev, current) {
+                        return Ok(Coordinates {
+                            x: resolved.x,
+                            y: resolved.y,
+                        });
+                    }
+                }
+                last = Some(current);
+            } else {
+                last = None;
+            }
+
+            if Instant::now() >= deadline {
+                return Err(EngineError::ActionTimeout {
+                    r#ref: r#ref.to_string(),
+                    timeout,
+                    last_visible: last.is_some(),
+                });
+            }
+            tokio::time::sleep(ACTIONABILITY_POLL_INTERVAL).await;
+        }
+    }
+}
+
+fn rects_close(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> bool {
+    (a.0 - b.0).abs() < STABLE_EPSILON_PX
+        && (a.1 - b.1).abs() < STABLE_EPSILON_PX
+        && (a.2 - b.2).abs() < STABLE_EPSILON_PX
+        && (a.3 - b.3).abs() < STABLE_EPSILON_PX
+}

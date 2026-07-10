@@ -1,4 +1,5 @@
 mod doctor;
+mod mcp;
 
 use clap::{Parser, Subcommand};
 
@@ -25,6 +26,14 @@ enum Command {
         #[arg(long)]
         headed: bool,
     },
+    /// Run the `browser` MCP server over stdio (mcp-server spec). Configure
+    /// this as an MCP server in an agent host; the browser session is
+    /// created lazily on the first tool call.
+    Mcp {
+        /// Launch the browser headed instead of headless.
+        #[arg(long)]
+        headed: bool,
+    },
 }
 
 #[tokio::main]
@@ -40,5 +49,6 @@ async fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Doctor { json, headed } => doctor::run(json, !headed).await,
+        Command::Mcp { headed } => mcp::run(!headed).await,
     }
 }

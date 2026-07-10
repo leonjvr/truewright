@@ -1,0 +1,76 @@
+[stderr] [2m2026-07-10T21:11:01.080033Z[0m [33m WARN[0m [2mcdp::connection[0m[2m:[0m cdp transport recv failed [3merror[0m[2m=[0mwebsocket error: IO error: An existing connection was forcibly closed by the remote host. (os error 10054)
+== initialize ==
+{'jsonrpc': '2.0', 'id': 1, 'result': {'protocolVersion': '2024-11-05', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'rmcp', 'version': '2.2.0'}, 'instructions': 'Drives a real Chrome/Edge browser. Tools: browser_navigate(url), browser_snapshot(), browser_click(ref), browser_type(ref, text, submit?), browser_press(key), browser_wait_for(text, timeout_ms?), browser_screenshot(), browser_close(). Refs come from the snapshot text, e.g. `[e6]` -> ref "e6". Actions do not auto-return a new snapshot; call browser_snapshot again after an action that may have changed the page.'}}
+== tools/list ==
+[
+  "browser_click",
+  "browser_close",
+  "browser_navigate",
+  "browser_press",
+  "browser_screenshot",
+  "browser_snapshot",
+  "browser_type",
+  "browser_wait_for"
+]
+== browser_navigate ==
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "page: \"Test Form\" url: file:///C:/Users/leon/repos/ai-browser/crates/engine/tests/fixtures/form.html\n  - main [e5]\n    - heading \"Sign up\" [e1]\n    - form [e4]\n      - text \"Email address\"\n      - textbox \"Email address\" [e2]\n      - button \"Create account\" [e3]\n"
+      }
+    ],
+    "isError": false
+  }
+}
+== browser_snapshot ==
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "page: \"Test Form\" url: file:///C:/Users/leon/repos/ai-browser/crates/engine/tests/fixtures/form.html\n  - main [e5]\n    - heading \"Sign up\" [e1]\n    - form [e4]\n      - text \"Email address\"\n      - textbox \"Email address\" [e2]\n      - button \"Create account\" [e3]\n"
+      }
+    ],
+    "isError": false
+  }
+}
+email_ref = e2
+== browser_type ==
+{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "typed into e2. Call browser_snapshot to see any resulting changes."
+      }
+    ],
+    "isError": false
+  }
+}
+== browser_snapshot after type ==
+contains typed value: True
+== browser_screenshot ==
+image mimeType: image/png data length: 9844
+== browser_close ==
+{
+  "jsonrpc": "2.0",
+  "id": 8,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "session closed"
+      }
+    ],
+    "isError": false
+  }
+}
+DONE

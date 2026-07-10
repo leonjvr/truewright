@@ -236,6 +236,19 @@ impl LaunchedBrowser {
     }
 }
 
+impl Drop for LaunchedBrowser {
+    /// Best-effort safety net: if `shutdown` was never called (e.g. the
+    /// caller panicked before reaching it), send SIGKILL/TerminateProcess
+    /// so a launched browser doesn't outlive this value and hold its
+    /// profile directory locked indefinitely. `shutdown` is still the
+    /// primary path — it also `.wait()`s to reap the process.
+    fn drop(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.start_kill();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

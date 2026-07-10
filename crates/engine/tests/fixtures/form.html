@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Test Form</title></head>
+<body>
+  <main>
+    <h1>Sign up</h1>
+    <form id="signup">
+      <label for="email">Email address</label>
+      <input id="email" type="text" placeholder="you@example.com" />
+      <button id="submit" type="button">Create account</button>
+    </form>
+    <p id="status"></p>
+    <div class="decorative-wrapper"><div class="inner"></div></div>
+  </main>
+  <script>
+    document.getElementById('submit').addEventListener('click', function () {
+      document.getElementById('status').textContent = 'Account created';
+    });
+  </script>
+</body>
+</html>

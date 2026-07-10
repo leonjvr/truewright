@@ -1,4 +1,5 @@
 pub mod browser;
+pub mod input;
 pub mod page;
 pub mod runtime;
 pub mod target;
