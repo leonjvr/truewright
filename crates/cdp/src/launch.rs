@@ -107,30 +107,97 @@ fn registry_lookup(kind: BrowserKind, checked: &mut Vec<String>) -> Option<PathB
 }
 
 fn well_known_paths(kind: BrowserKind) -> Vec<PathBuf> {
-    let program_files = std::env::var_os("ProgramFiles").map(PathBuf::from);
-    let program_files_x86 = std::env::var_os("ProgramFiles(x86)").map(PathBuf::from);
-    let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
-
     let mut paths = Vec::new();
-    match kind {
-        BrowserKind::Chrome => {
-            for base in [program_files, program_files_x86, local_app_data]
-                .into_iter()
-                .flatten()
-            {
-                paths.push(base.join(r"Google\Chrome\Application\chrome.exe"));
+
+    #[cfg(windows)]
+    {
+        let program_files = std::env::var_os("ProgramFiles").map(PathBuf::from);
+        let program_files_x86 = std::env::var_os("ProgramFiles(x86)").map(PathBuf::from);
+        let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+
+        match kind {
+            BrowserKind::Chrome => {
+                for base in [program_files, program_files_x86, local_app_data]
+                    .into_iter()
+                    .flatten()
+                {
+                    paths.push(base.join(r"Google\Chrome\Application\chrome.exe"));
+                }
             }
-        }
-        BrowserKind::Edge => {
-            for base in [program_files_x86, program_files, local_app_data]
-                .into_iter()
-                .flatten()
-            {
-                paths.push(base.join(r"Microsoft\Edge\Application\msedge.exe"));
+            BrowserKind::Edge => {
+                for base in [program_files_x86, program_files, local_app_data]
+                    .into_iter()
+                    .flatten()
+                {
+                    paths.push(base.join(r"Microsoft\Edge\Application\msedge.exe"));
+                }
             }
         }
     }
+
+    // No registry-equivalent lookup exists on Linux, so well-known paths are
+    // the only discovery mechanism there (browser-attach spec: "Discover
+    // installed Chromium browsers" — Chromium/Linux scenario). Edge isn't
+    // available on a stock Linux install, so no paths are added for it.
+    #[cfg(target_os = "linux")]
+    {
+        if kind == BrowserKind::Chrome {
+            for candidate in [
+                "/usr/bin/google-chrome",
+                "/usr/bin/google-chrome-stable",
+                "/usr/bin/chromium",
+                "/usr/bin/chromium-browser",
+            ] {
+                paths.push(PathBuf::from(candidate));
+            }
+        }
+    }
+
     paths
+}
+
+/// Per-user data directory root: `%LOCALAPPDATA%` on Windows,
+/// `$XDG_DATA_HOME` (falling back to `~/.local/share`) on Linux
+/// (browser-attach spec: "Launch with an isolated profile").
+#[allow(clippy::result_large_err)]
+fn profile_base_dir() -> Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .ok_or_else(|| CdpError::LaunchFailed("LOCALAPPDATA is not set".into()))
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
+            return Ok(PathBuf::from(xdg));
+        }
+        let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| {
+            CdpError::LaunchFailed("neither XDG_DATA_HOME nor HOME is set".into())
+        })?;
+        Ok(home.join(".local").join("share"))
+    }
+}
+
+/// Chromium's sandbox needs privileges a bare container init typically
+/// lacks; `--no-sandbox` is the standard workaround, but only applied when
+/// actually running as root on Linux (never on Windows, never as a normal
+/// Linux user).
+#[cfg(target_os = "linux")]
+fn running_as_root() -> bool {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status.lines().find_map(|line| {
+                line.strip_prefix("Uid:").map(|rest| {
+                    rest.split_whitespace()
+                        .next()
+                        .and_then(|uid| uid.parse::<u32>().ok())
+                        == Some(0)
+                })
+            })
+        })
+        .unwrap_or(false)
 }
 
 pub struct LaunchedBrowser {
@@ -141,18 +208,15 @@ pub struct LaunchedBrowser {
 }
 
 /// Launch with an isolated profile (browser-attach spec: "Launch with an
-/// isolated profile"). `profile_name` selects the directory under
-/// `%LOCALAPPDATA%\aib\profiles\<profile_name>` — never the live default
-/// profile.
+/// isolated profile"). `profile_name` selects the directory under an
+/// OS-appropriate per-user data directory (see `profile_base_dir`) — never
+/// the live default profile.
 pub async fn launch(
     browser: &DiscoveredBrowser,
     profile_name: &str,
     headless: bool,
 ) -> Result<LaunchedBrowser> {
-    let local_app_data = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .ok_or_else(|| CdpError::LaunchFailed("LOCALAPPDATA is not set".into()))?;
-    let user_data_dir = local_app_data
+    let user_data_dir = profile_base_dir()?
         .join("aib")
         .join("profiles")
         .join(profile_name);
@@ -171,6 +235,10 @@ pub async fn launch(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .stdin(std::process::Stdio::null());
+    #[cfg(target_os = "linux")]
+    if running_as_root() {
+        cmd.arg("--no-sandbox");
+    }
     if headless {
         cmd.arg("--headless=new");
     }
@@ -257,10 +325,21 @@ mod tests {
     fn well_known_paths_are_kind_specific() {
         let chrome = well_known_paths(BrowserKind::Chrome);
         let edge = well_known_paths(BrowserKind::Edge);
+        // "chrom" (not "Chrome") so this holds on both Windows
+        // (...\Google\Chrome\...) and Linux (/usr/bin/chromium).
         assert!(chrome
             .iter()
-            .all(|p| p.to_string_lossy().contains("Chrome")));
+            .all(|p| p.to_string_lossy().to_lowercase().contains("chrom")));
         assert!(edge.iter().all(|p| p.to_string_lossy().contains("Edge")));
+    }
+
+    #[test]
+    fn profile_base_dir_resolves_to_an_absolute_path() {
+        let base = profile_base_dir().expect("resolves on this platform");
+        assert!(
+            base.is_absolute(),
+            "expected an absolute path, got {base:?}"
+        );
     }
 
     #[test]

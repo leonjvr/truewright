@@ -39,4 +39,14 @@ aib doctor --headed   # show the browser windows
 aib doctor --json     # machine-readable report for CI
 ```
 
-Exits non-zero if any step fails on any browser. See `openspec/changes/phase-0-cdp-spike/` for the full spec and `doctor-evidence.json` for a recorded passing run (both browsers, p50 < 5ms).
+Exits non-zero if any step fails on any browser. See `openspec/specs/doctor-cli/spec.md` for the full spec and `openspec/changes/archive/*-phase-0-cdp-spike/doctor-evidence.json` for a recorded passing run (both browsers, p50 < 5ms).
+
+## Testing in Docker
+
+Browser-launching tests spawn real Chrome/Chromium processes and can leave orphans if a test panics before cleanup — safer to run them disposably than against your host's real browser session:
+
+```
+bash docker/run-tests.sh
+```
+
+Builds a Debian + Chromium image, runs `cargo test --workspace` and `aib doctor --json` inside a container, and discards everything when it exits — nothing touches your host's browser or its profile directories. `crates/cdp`'s browser discovery works on both Windows (registry + `%LOCALAPPDATA%`) and Linux (`/usr/bin/chromium` etc. + `$XDG_DATA_HOME`/`~/.local/share`) for this reason.

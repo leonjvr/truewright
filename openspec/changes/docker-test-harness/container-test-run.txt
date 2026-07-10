@@ -1,0 +1,390 @@
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 30B 0.1s
+#1 transferring dockerfile: 524B 0.2s done
+#1 DONE 0.4s
+
+#2 [internal] load metadata for docker.io/library/rust:slim-bookworm
+#2 DONE 1.7s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 52B 0.0s done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/rust:slim-bookworm@sha256:cfbb0e0ef7a73e736386bfa346f1cb0503c6d162969dc9426fb37834f3f64c25
+#4 resolve docker.io/library/rust:slim-bookworm@sha256:cfbb0e0ef7a73e736386bfa346f1cb0503c6d162969dc9426fb37834f3f64c25 0.1s done
+#4 DONE 0.1s
+
+#5 [2/3] RUN apt-get update && apt-get install -y --no-install-recommends     chromium     fonts-liberation     ca-certificates     build-essential     pkg-config     && rm -rf /var/lib/apt/lists/*
+#5 CACHED
+
+#6 [3/3] WORKDIR /app
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 exporting manifest sha256:152a9952bda58df327b406f5b216683452c2b6566116b399e0dd6b820be0953e done
+#7 exporting config sha256:6e74f68efd25c25960a997787de54ee277f83e160dfd145bee5b134d95067dfd done
+#7 exporting attestation manifest sha256:1d655735d47cd957d1c3038321854c69d77955c64d6d1bb355324b0739fba5ec 0.1s done
+#7 exporting manifest list sha256:808bac166e56e923025272e7ce913690d72ba6ab1fc2342a661f506f633e3683
+#7 exporting manifest list sha256:808bac166e56e923025272e7ce913690d72ba6ab1fc2342a661f506f633e3683 0.0s done
+#7 naming to docker.io/library/aib-test:latest done
+#7 unpacking to docker.io/library/aib-test:latest 0.0s done
+#7 DONE 0.2s
+
+View build details: docker-desktop://dashboard/build/desktop-linux/desktop-linux/jnffef1id23391hzhhruxxr7x
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded version_check v0.9.5
+  Downloaded tracing-log v0.2.0
+  Downloaded utf-8 v0.7.6
+  Downloaded utf8parse v0.2.2
+  Downloaded zmij v1.0.21
+  Downloaded cfg-if v1.0.4
+  Downloaded darling_macro v0.23.0
+  Downloaded tungstenite v0.24.0
+  Downloaded tracing-core v0.1.36
+  Downloaded unicode-ident v1.0.24
+  Downloaded colorchoice v1.0.5
+  Downloaded cpufeatures v0.2.17
+  Downloaded typenum v1.20.1
+  Downloaded sha1 v0.10.7
+  Downloaded tracing-subscriber v0.3.23
+  Downloaded futures-core v0.3.32
+  Downloaded is_terminal_polyfill v1.70.2
+  Downloaded zerocopy v0.8.54
+  Downloaded futures-io v0.3.32
+  Downloaded ref-cast v1.0.25
+  Downloaded futures-sink v0.3.32
+  Downloaded errno v0.3.14
+  Downloaded heck v0.5.0
+  Downloaded crypto-common v0.1.7
+  Downloaded clap_lex v1.1.0
+  Downloaded generic-array v0.14.7
+  Downloaded futures-macro v0.3.32
+  Downloaded ident_case v1.0.1
+  Downloaded scopeguard v1.2.0
+  Downloaded anstyle-query v1.1.5
+  Downloaded lazy_static v1.5.0
+  Downloaded rand_chacha v0.3.1
+  Downloaded dyn-clone v1.0.20
+  Downloaded futures-task v0.3.32
+  Downloaded matchers v0.2.0
+  Downloaded anstream v1.0.0
+  Downloaded block-buffer v0.10.4
+  Downloaded anstyle v1.0.14
+  Downloaded async-trait v0.1.89
+  Downloaded byteorder v1.5.0
+  Downloaded anstyle-parse v1.0.0
+  Downloaded strsim v0.11.1
+  Downloaded tokio-macros v2.7.0
+  Downloaded serde_derive_internals v0.29.1
+  Downloaded quote v1.0.46
+  Downloaded schemars_derive v1.2.1
+  Downloaded ref-cast-impl v1.0.25
+  Downloaded digest v0.10.7
+  Downloaded pin-project-lite v0.2.17
+  Downloaded ppv-lite86 v0.2.21
+  Downloaded rand_core v0.6.4
+  Downloaded pastey v0.2.3
+  Downloaded autocfg v1.5.1
+  Downloaded futures-executor v0.3.32
+  Downloaded itoa v1.0.18
+  Downloaded dashmap v6.2.1
+  Downloaded thiserror v2.0.18
+  Downloaded thiserror-impl v1.0.69
+  Downloaded slab v0.4.12
+  Downloaded thiserror v1.0.69
+  Downloaded thread_local v1.1.9
+  Downloaded lock_api v0.4.14
+  Downloaded tokio-tungstenite v0.24.0
+  Downloaded thiserror-impl v2.0.18
+  Downloaded nu-ansi-term v0.50.3
+  Downloaded crossbeam-utils v0.8.22
+  Downloaded darling v0.23.0
+  Downloaded parking_lot_core v0.9.12
+  Downloaded getrandom v0.2.17
+  Downloaded rmcp-macros v2.2.0
+  Downloaded httparse v1.10.1
+  Downloaded iana-time-zone v0.1.65
+  Downloaded clap_derive v4.6.1
+  Downloaded data-encoding v2.11.0
+  Downloaded smallvec v1.15.2
+  Downloaded futures-channel v0.3.32
+  Downloaded clap v4.6.1
+  Downloaded signal-hook-registry v1.4.8
+  Downloaded aho-corasick v1.1.4
+  Downloaded once_cell v1.21.4
+  Downloaded serde_core v1.0.228
+  Downloaded sharded-slab v0.1.7
+  Downloaded log v0.4.33
+  Downloaded serde_derive v1.0.228
+  Downloaded base64 v0.22.1
+  Downloaded darling_core v0.23.0
+  Downloaded num-traits v0.2.19
+  Downloaded tracing-attributes v0.1.31
+  Downloaded socket2 v0.6.4
+  Downloaded futures v0.3.32
+  Downloaded proc-macro2 v1.0.106
+  Downloaded bytes v1.12.1
+  Downloaded schemars v1.2.1
+  Downloaded serde v1.0.228
+  Downloaded rand v0.8.6
+  Downloaded mio v1.2.1
+  Downloaded http v1.4.2
+  Downloaded memchr v2.8.3
+  Downloaded hashbrown v0.14.5
+  Downloaded tokio-util v0.7.18
+  Downloaded clap_builder v4.6.0
+  Downloaded serde_json v1.0.150
+  Downloaded futures-util v0.3.32
+  Downloaded chrono v0.4.45
+  Downloaded regex-syntax v0.8.11
+  Downloaded syn v2.0.118
+  Downloaded rmcp v2.2.0
+  Downloaded tracing v0.1.44
+  Downloaded regex-automata v0.4.15
+  Downloaded tokio v1.52.3
+  Downloaded libc v0.2.186
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling libc v0.2.186
+   Compiling cfg-if v1.0.4
+   Compiling version_check v0.9.5
+   Compiling pin-project-lite v0.2.17
+   Compiling itoa v1.0.18
+   Compiling zerocopy v0.8.54
+   Compiling typenum v1.20.1
+   Compiling zmij v1.0.21
+   Compiling memchr v2.8.3
+   Compiling futures-core v0.3.32
+   Compiling serde_core v1.0.228
+   Compiling futures-sink v0.3.32
+   Compiling once_cell v1.21.4
+   Compiling bytes v1.12.1
+   Compiling futures-channel v0.3.32
+   Compiling slab v0.4.12
+   Compiling generic-array v0.14.7
+   Compiling futures-task v0.3.32
+   Compiling serde v1.0.228
+   Compiling futures-io v0.3.32
+   Compiling tracing-core v0.1.36
+   Compiling httparse v1.10.1
+   Compiling thiserror v1.0.69
+   Compiling serde_json v1.0.150
+   Compiling log v0.4.33
+   Compiling crossbeam-utils v0.8.22
+   Compiling cpufeatures v0.2.17
+   Compiling parking_lot_core v0.9.12
+   Compiling smallvec v1.15.2
+   Compiling http v1.4.2
+   Compiling byteorder v1.5.0
+   Compiling data-encoding v2.11.0
+   Compiling syn v2.0.118
+   Compiling scopeguard v1.2.0
+   Compiling utf-8 v0.7.6
+   Compiling lock_api v0.4.14
+   Compiling hashbrown v0.14.5
+   Compiling base64 v0.22.1
+   Compiling strsim v0.11.1
+   Compiling getrandom v0.2.17
+   Compiling errno v0.3.14
+   Compiling crypto-common v0.1.7
+   Compiling signal-hook-registry v1.4.8
+   Compiling rand_core v0.6.4
+   Compiling block-buffer v0.10.4
+   Compiling mio v1.2.1
+   Compiling socket2 v0.6.4
+   Compiling digest v0.10.7
+   Compiling autocfg v1.5.1
+   Compiling ident_case v1.0.1
+   Compiling sha1 v0.10.7
+   Compiling dashmap v6.2.1
+   Compiling ref-cast v1.0.25
+   Compiling thiserror v2.0.18
+   Compiling rmcp v2.2.0
+   Compiling dyn-clone v1.0.20
+   Compiling utf8parse v0.2.2
+   Compiling num-traits v0.2.19
+   Compiling pastey v0.2.3
+   Compiling anstyle-parse v1.0.0
+   Compiling colorchoice v1.0.5
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstyle-query v1.1.5
+   Compiling regex-syntax v0.8.11
+   Compiling anstyle v1.0.14
+   Compiling heck v0.5.0
+   Compiling lazy_static v1.5.0
+   Compiling clap_lex v1.1.0
+   Compiling sharded-slab v0.1.7
+   Compiling anstream v1.0.0
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling nu-ansi-term v0.50.3
+   Compiling clap_builder v4.6.0
+   Compiling regex-automata v0.4.15
+   Compiling ppv-lite86 v0.2.21
+   Compiling darling_core v0.23.0
+   Compiling serde_derive_internals v0.29.1
+   Compiling rand_chacha v0.3.1
+   Compiling rand v0.8.6
+   Compiling futures-macro v0.3.32
+   Compiling serde_derive v1.0.228
+   Compiling tokio-macros v2.7.0
+   Compiling tracing-attributes v0.1.31
+   Compiling thiserror-impl v1.0.69
+   Compiling ref-cast-impl v1.0.25
+   Compiling schemars_derive v1.2.1
+   Compiling tokio v1.52.3
+   Compiling futures-util v0.3.32
+   Compiling thiserror-impl v2.0.18
+   Compiling async-trait v0.1.89
+   Compiling matchers v0.2.0
+   Compiling clap_derive v4.6.1
+   Compiling tungstenite v0.24.0
+   Compiling tracing v0.1.44
+   Compiling tracing-subscriber v0.3.23
+   Compiling clap v4.6.1
+   Compiling darling_macro v0.23.0
+   Compiling darling v0.23.0
+   Compiling rmcp-macros v2.2.0
+   Compiling chrono v0.4.45
+   Compiling futures-executor v0.3.32
+   Compiling futures v0.3.32
+   Compiling schemars v1.2.1
+   Compiling tokio-tungstenite v0.24.0
+   Compiling tokio-util v0.7.18
+   Compiling cdp v0.0.1 (/app/crates/cdp)
+   Compiling engine v0.0.1 (/app/crates/engine)
+   Compiling mcp-server v0.0.1 (/app/crates/mcp)
+   Compiling aib v0.0.1 (/app)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 26s
+     Running unittests src/main.rs (target/debug/deps/aib-f6fe42db1f1dbcab)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/cdp-f204aea4aab9bc5f)
+
+running 9 tests
+test launch::tests::attach_existing_does_not_own_a_child ... ok
+test connection::tests::protocol_error_surfaces_as_typed_error ... ok
+test connection::tests::successful_command_round_trip ... ok
+test connection::tests::disconnect_fails_in_flight_commands ... ok
+test launch::tests::profile_base_dir_resolves_to_an_absolute_path ... ok
+test launch::tests::well_known_paths_are_kind_specific ... ok
+test launch::tests::devtools_endpoint_reads_existing_port_file ... ok
+test connection::tests::commands_issued_after_close_fail_immediately ... ok
+test launch::tests::devtools_endpoint_times_out_when_file_never_appears ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+     Running tests/full_cycle.rs (target/debug/deps/full_cycle-cd095128d4d62895)
+
+running 1 test
+test full_cycle_against_installed_browser ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.84s
+
+     Running unittests src/lib.rs (target/debug/deps/engine-e06f47c0f2e59ddf)
+
+running 2 tests
+test snapshot::tests::renders_empty_tree ... ok
+test snapshot::tests::renders_role_name_value_and_ref ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/session_flow.rs (target/debug/deps/session_flow-3d8d30d7db9dc9a1)
+
+running 1 test
+test navigate_snapshot_type_click_wait_screenshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.50s
+
+     Running unittests src/lib.rs (target/debug/deps/mcp_server-e3728302eaa14852)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cdp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests engine
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mcp_server
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+--- aib doctor ---
+[2m2026-07-10T21:26:03.144405Z[0m [33m WARN[0m [2mcdp::connection[0m[2m:[0m cdp transport recv failed [3merror[0m[2m=[0mwebsocket error: WebSocket protocol error: Connection reset without closing handshake
+{
+  "ok": true,
+  "browsers": [
+    {
+      "kind": "Chrome",
+      "path": "/usr/bin/chromium",
+      "steps": [
+        {
+          "name": "launch",
+          "status": "passed",
+          "duration_ms": 308.759219
+        },
+        {
+          "name": "connect",
+          "status": "passed",
+          "duration_ms": 124.53773899999999
+        },
+        {
+          "name": "create_context",
+          "status": "passed",
+          "duration_ms": 28.548075
+        },
+        {
+          "name": "create_page",
+          "status": "passed",
+          "duration_ms": 275.15527699999996
+        },
+        {
+          "name": "navigate",
+          "status": "passed",
+          "duration_ms": 73.73188499999999
+        },
+        {
+          "name": "evaluate",
+          "status": "passed",
+          "duration_ms": 5.238214
+        },
+        {
+          "name": "screenshot",
+          "status": "passed",
+          "duration_ms": 715.5939609999999
+        },
+        {
+          "name": "teardown",
+          "status": "passed",
+          "duration_ms": 1.568783
+        }
+      ],
+      "latency": {
+        "samples": 100,
+        "p50_ms": 2.129274,
+        "p95_ms": 2.839305,
+        "warning": null
+      },
+      "passed": true
+    }
+  ]
+}
