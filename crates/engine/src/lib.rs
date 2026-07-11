@@ -21,5 +21,5 @@ pub use motion::profile_store::StoredProfile;
 pub use motion::{Persona, Training};
 pub use network::{Cassette, NetworkRecording, NetworkRecordingSummary, NetworkReplay};
 pub use recording::{Recording, RecordingOptions, RecordingOutput};
-pub use session::{HumanLike, Session};
+pub use session::{HumanLike, PageInfo, Session};
 pub use yaml_runner::{RunSummary, Step};

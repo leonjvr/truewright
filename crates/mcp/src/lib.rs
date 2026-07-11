@@ -187,6 +187,14 @@ pub struct ConsoleStartRequest {
     pub name: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SwitchPageRequest {
+    #[schemars(
+        description = "Page id from browser_list_pages -- subsequent actions (browser_click/browser_type/browser_snapshot/etc.) target this page instead"
+    )]
+    pub page_id: String,
+}
+
 #[derive(Clone)]
 pub struct AibTools {
     session: Arc<Mutex<Option<engine::Session>>>,
@@ -771,6 +779,49 @@ impl AibTools {
         )]))
     }
 
+    #[tool(
+        description = "List every currently-attached page (the original page plus any popup/new tab opened as a side effect of interacting with it), showing which one is active"
+    )]
+    async fn browser_list_pages(&self) -> Result<CallToolResult, McpError> {
+        self.ensure_session().await?;
+        let guard = self.session.lock().await;
+        let session = guard.as_ref().ok_or_else(no_session_error)?;
+        let pages = session.list_pages().await.map_err(map_engine_err)?;
+        let text = pages
+            .iter()
+            .map(|p| {
+                format!(
+                    "{}[{}] {} -- {}",
+                    if p.active { "* " } else { "  " },
+                    p.page_id,
+                    p.url,
+                    p.title
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Switch which attached page subsequent actions (browser_click/browser_type/browser_snapshot/etc.) target. Use browser_list_pages to find the page_id, e.g. after clicking something that opens a popup or new tab."
+    )]
+    async fn browser_switch_page(
+        &self,
+        Parameters(SwitchPageRequest { page_id }): Parameters<SwitchPageRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_session().await?;
+        let guard = self.session.lock().await;
+        let session = guard.as_ref().ok_or_else(no_session_error)?;
+        session
+            .switch_page(&page_id)
+            .await
+            .map_err(map_engine_err)?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "switched to page {page_id}. Call browser_snapshot to see it."
+        ))]))
+    }
+
     #[tool(description = "Close the browser session")]
     async fn browser_close(&self) -> Result<CallToolResult, McpError> {
         let mut guard = self.session.lock().await;
@@ -794,8 +845,8 @@ impl ServerHandler for AibTools {
             .with_server_info(Implementation::from_build_env())
             .with_instructions(
                 "Drives a real Chrome/Edge browser. Tools: browser_navigate(url), \
-                 browser_snapshot(), browser_click(ref, human_like?, persona?, trained_profile?, seed?), \
-                 browser_type(ref, text, submit?, human_like?, persona?, trained_profile?, seed?), \
+                 browser_snapshot(), browser_click(ref, human_like?, persona?, trained_profile?, seed?, true_input?), \
+                 browser_type(ref, text, submit?, human_like?, persona?, trained_profile?, seed?, true_input?), \
                  browser_press(key), browser_wait_for(text, timeout_ms?), browser_screenshot(), \
                  browser_record_start(max_duration_ms?, quality?), browser_record_stop(), \
                  browser_train_start(name), browser_train_stop(), \
@@ -806,6 +857,7 @@ impl ServerHandler for AibTools {
                  browser_console_start(name), browser_console_stop(), \
                  browser_assert(text, present?), \
                  browser_run_yaml(source), browser_export_yaml(name), \
+                 browser_list_pages(), browser_switch_page(page_id), \
                  browser_close(). Refs come from the snapshot text, e.g. `[e6]` -> ref \"e6\". \
                  Actions do not auto-return a new snapshot; call browser_snapshot again after an \
                  action that may have changed the page. Use browser_record_start/stop to capture a \
@@ -847,7 +899,17 @@ impl ServerHandler for AibTools {
                  `- click: e6` or `- type: {ref: e6, text: \"...\"}`) against the current session, \
                  stopping at the first failing step; browser_export_yaml(name) turns an already-saved \
                  trace's actions back into a runnable script of that same format -- record a flow once \
-                 with browser_console_start/stop, then export and re-run it as a repeatable test."
+                 with browser_console_start/stop, then export and re-run it as a repeatable test. A \
+                 popup or new tab opened as a side effect of an action (e.g. \"Sign in with Google\") \
+                 attaches automatically but does NOT become active on its own -- call \
+                 browser_list_pages() to see it (marked with its page_id) and browser_switch_page(page_id) \
+                 to start driving it; if that page later closes itself (e.g. after an OAuth redirect \
+                 completes), the active page falls back to the original one automatically. Set \
+                 true_input: true on browser_click/browser_type to dispatch via real Windows OS-level \
+                 input (SendInput) instead of CDP -- the actual system mouse cursor moves and clicks for \
+                 real, and real keystrokes are sent, unlike every other mode here which is still \
+                 CDP-synthesized even though Chrome marks it isTrusted; Windows-only, headed sessions \
+                 only, rejected with a clear error otherwise."
                     .to_string(),
             )
     }
@@ -895,7 +957,8 @@ fn map_engine_err(e: engine::EngineError) -> McpError {
         | UnknownCassette(_)
         | Clock(_)
         | YamlRunner(_)
-        | TrueInputUnsupported(_) => McpError::invalid_params(e.to_string(), None),
+        | TrueInputUnsupported(_)
+        | UnknownPage(_) => McpError::invalid_params(e.to_string(), None),
         ActionTimeout { .. }
         | WaitTimeout { .. }
         | Cdp(_)

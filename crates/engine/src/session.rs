@@ -4,6 +4,7 @@ use crate::motion::{self, Persona};
 use crate::recording::{Recording, RecordingOptions};
 use crate::snapshot::{self, SnapshotResult};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,12 +28,25 @@ const WAIT_FOR_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// spec: "Bounded-poll actionability before acting").
 const STABLE_EPSILON_PX: f64 = 0.5;
 
-/// One browser session: one browser, one context, one page — the Phase 1
-/// scope (design.md Decision #1: no daemon, no multi-session yet).
+/// One browser session: one browser, one context, and one *or more* pages
+/// (popup-auto-attach spec) — the Phase 1 "no daemon, no multi-session yet"
+/// scope (design.md Decision #1, `2026-07-10-phase-1-agent-mvp`) was about
+/// one `Session` per process, not one page per `Session`; this tracks
+/// popups/new tabs that attach as a side effect of driving the page.
 pub struct Session {
     launched: Option<cdp::launch::LaunchedBrowser>,
     context: cdp::ops::BrowserContext,
-    page: cdp::ops::Page,
+    /// Every page currently attached, keyed by CDP target ID.
+    pages: Mutex<HashMap<String, cdp::ops::Page>>,
+    /// Which page every action method (`click`/`snapshot`/etc.) currently
+    /// operates against.
+    active_target_id: Mutex<String>,
+    /// The page `Session::launch` originally created. If the active page
+    /// closes (e.g. a popup finishing an OAuth redirect), the active page
+    /// falls back to this one rather than an arbitrary remaining page
+    /// (popup-auto-attach spec: "Predictable fallback when the active page
+    /// closes").
+    primary_target_id: String,
     /// Last dispatched mouse position, so a human-like move starts from
     /// wherever the cursor actually is instead of teleporting (human-motion
     /// spec: "Curved, timed mouse movement to a target").
@@ -88,6 +102,16 @@ struct Coordinates {
     height: f64,
 }
 
+/// One attached page, as reported by `Session::list_pages` (popup-auto-attach
+/// spec).
+#[derive(Debug, Clone)]
+pub struct PageInfo {
+    pub page_id: String,
+    pub url: String,
+    pub title: String,
+    pub active: bool,
+}
+
 impl Session {
     /// Launches a browser and opens one context and one blank page
     /// (page-snapshot / browser-actions specs' prerequisite state).
@@ -114,16 +138,147 @@ impl Session {
         let browser = cdp::ops::Browser::connect(&launched.ws_url).await?;
         let context = browser.new_context().await?;
         let page = context.new_page("about:blank").await?;
+        let target_id = page.target_id().to_string();
+        let mut pages = HashMap::new();
+        pages.insert(target_id.clone(), page);
 
         Ok(Self {
             launched: Some(launched),
             context,
-            page,
+            pages: Mutex::new(pages),
+            active_target_id: Mutex::new(target_id.clone()),
+            primary_target_id: target_id,
             mouse_pos: Mutex::new((0.0, 0.0)),
             training_active: Arc::new(AtomicBool::new(false)),
             action_trace_sink: Arc::new(Mutex::new(None)),
             headless,
         })
+    }
+
+    /// The page every action method currently operates against. Panics only
+    /// if the registry and `active_target_id` have gone out of sync, which
+    /// would be an engine bug, not a reachable user-facing state --
+    /// `switch_page` validates before updating `active_target_id`, and
+    /// `refresh_attached_pages` resets it to `primary_target_id` (always
+    /// present until `close`) whenever the active page detaches.
+    async fn active_page(&self) -> cdp::ops::Page {
+        let active_id = self.active_target_id.lock().await.clone();
+        self.pages
+            .lock()
+            .await
+            .get(&active_id)
+            .cloned()
+            .expect("active_target_id always refers to a page in the registry")
+    }
+
+    /// Non-blocking drain of any newly discovered/destroyed targets noticed
+    /// browser-wide since the last poll (popup-auto-attach spec: "Automatic
+    /// attach to new top-level targets"). Filtered to top-level page targets
+    /// belonging to this session's own context -- other browser contexts'
+    /// targets and cross-origin OOPIF (iframe-type) targets are both out of
+    /// scope for this slice and ignored, not tracked as pages.
+    async fn refresh_attached_pages(&self) {
+        let created = self.context.poll_created_targets().await;
+        let destroyed = self.context.poll_destroyed_targets().await;
+
+        for ev in created {
+            let info = ev.target_info;
+            if info.target_type != "page" {
+                continue;
+            }
+            if info.browser_context_id.as_deref() != Some(self.context.context_id()) {
+                continue;
+            }
+            if self.pages.lock().await.contains_key(&info.target_id) {
+                continue; // already tracked (e.g. this session's own primary page)
+            }
+            match self
+                .context
+                .attach_existing_target(info.target_id.clone())
+                .await
+            {
+                Ok(new_page) => {
+                    self.pages.lock().await.insert(info.target_id, new_page);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to attach newly discovered target");
+                }
+            }
+        }
+
+        for ev in destroyed {
+            self.forget_page(&ev.target_id).await;
+        }
+    }
+
+    /// Removes a page from the registry and, if it was the active one,
+    /// falls back to the primary page (popup-auto-attach spec: "Predictable
+    /// fallback when the active page closes"). Shared by the
+    /// `Target.targetDestroyed`-driven path and `list_pages`'s self-heal
+    /// path -- a closing page's destroy event isn't reliably delivered
+    /// before `Target.getTargetInfo` on it starts failing (confirmed via
+    /// live testing: `window.close()` from within the page can race ahead
+    /// of the event), so both paths need the exact same fallback, not just
+    /// the "expected" one.
+    async fn forget_page(&self, target_id: &str) {
+        self.pages.lock().await.remove(target_id);
+        let mut active = self.active_target_id.lock().await;
+        if *active == target_id {
+            *active = self.primary_target_id.clone();
+        }
+    }
+
+    /// Every currently-attached page, refreshed first (popup-auto-attach
+    /// spec: "Explicit page listing and switching"). Chrome can transiently
+    /// create and almost immediately destroy an extra, unrelated target
+    /// around browser-context/page setup (confirmed via live testing --
+    /// see design.md addendum); if a page this method just attached to
+    /// turns out to already be gone by the time its info is queried, it's
+    /// dropped from the registry and the results rather than surfacing a
+    /// hard error for something the agent never asked about.
+    pub async fn list_pages(&self) -> Result<Vec<PageInfo>> {
+        self.refresh_attached_pages().await;
+        let known: Vec<cdp::ops::Page> = self.pages.lock().await.values().cloned().collect();
+
+        let mut fetched = Vec::with_capacity(known.len());
+        for page in known {
+            match page.target_info().await {
+                Ok(info) => fetched.push(info),
+                Err(e) => {
+                    tracing::warn!(error = %e, target_id = page.target_id(), "page vanished before it could be listed; dropping it");
+                    self.forget_page(page.target_id()).await;
+                }
+            }
+        }
+
+        // Read *after* any self-heal fallback above so a page that vanished
+        // while active is reflected by the correct (possibly just-reset)
+        // active id, not a stale snapshot from before this method ran.
+        let active_id = self.active_target_id.lock().await.clone();
+        Ok(fetched
+            .into_iter()
+            .map(|info| PageInfo {
+                active: info.target_id == active_id,
+                page_id: info.target_id,
+                url: info.url,
+                title: info.title,
+            })
+            .collect())
+    }
+
+    /// Changes which page subsequent action methods operate against
+    /// (popup-auto-attach spec). Errors clearly if `page_id` doesn't match
+    /// any currently-attached page, rather than silently doing nothing.
+    // EngineError is kept as one flat enum (matches cdp::CdpError's
+    // rationale); see the identical allow in cdp/src/launch.rs.
+    #[allow(clippy::result_large_err)]
+    pub async fn switch_page(&self, page_id: &str) -> Result<()> {
+        self.refresh_attached_pages().await;
+        if !self.pages.lock().await.contains_key(page_id) {
+            return Err(EngineError::UnknownPage(page_id.to_string()));
+        }
+        *self.active_target_id.lock().await = page_id.to_string();
+        Ok(())
     }
 
     /// Looks up a built-in persona by name, for callers (the MCP layer)
@@ -163,7 +318,8 @@ impl Session {
     /// `name`.
     pub async fn train_start(&self, name: &str) -> Result<motion::Training> {
         self.training_active.store(true, Ordering::SeqCst);
-        match motion::Training::start(&self.page, name, self.training_active.clone()).await {
+        let page = self.active_page().await;
+        match motion::Training::start(&page, name, self.training_active.clone()).await {
             Ok(training) => Ok(training),
             Err(e) => {
                 self.training_active.store(false, Ordering::SeqCst);
@@ -179,7 +335,8 @@ impl Session {
         &self,
         name: &str,
     ) -> Result<crate::network::NetworkRecording> {
-        crate::network::NetworkRecording::start(&self.page, name).await
+        let page = self.active_page().await;
+        crate::network::NetworkRecording::start(&page, name).await
     }
 
     /// Starts intercepting every request and fulfilling it from the named
@@ -187,7 +344,8 @@ impl Session {
     /// live-network dependency"). `NetworkReplay::stop` disables
     /// interception.
     pub async fn network_replay_start(&self, name: &str) -> Result<crate::network::NetworkReplay> {
-        crate::network::NetworkReplay::start(&self.page, name).await
+        let page = self.active_page().await;
+        crate::network::NetworkReplay::start(&page, name).await
     }
 
     /// Registers JS that runs before any of a page's own scripts, on every
@@ -195,7 +353,7 @@ impl Session {
     /// before a page's own scripts"). Register before navigating -- an
     /// init script only affects loads that happen after it's registered.
     pub async fn add_init_script(&self, source: &str) -> Result<()> {
-        self.page.add_init_script(source).await?;
+        self.active_page().await.add_init_script(source).await?;
         Ok(())
     }
 
@@ -223,7 +381,8 @@ impl Session {
     /// already be installed via `set_clock` on the current page.
     pub async fn advance_clock(&self, ms: u64) -> Result<()> {
         let raw = self
-            .page
+            .active_page()
+            .await
             .evaluate(&format!("typeof window.__aibAdvanceClock === 'function' ? (window.__aibAdvanceClock({ms}), true) : false"))
             .await?;
         if raw.as_bool() != Some(true) {
@@ -241,8 +400,8 @@ impl Session {
         &self,
         name: &str,
     ) -> Result<crate::console::ConsoleCapture> {
-        crate::console::ConsoleCapture::start(&self.page, name, self.action_trace_sink.clone())
-            .await
+        let page = self.active_page().await;
+        crate::console::ConsoleCapture::start(&page, name, self.action_trace_sink.clone()).await
     }
 
     /// Appends a one-line summary to the active trace, if any (action-trace
@@ -259,14 +418,21 @@ impl Session {
 
     pub async fn navigate(&self, url: &str) -> Result<String> {
         self.log_action(format!("navigate {url}")).await;
-        self.page.navigate_and_wait(url, NAVIGATE_TIMEOUT).await?;
+        self.active_page()
+            .await
+            .navigate_and_wait(url, NAVIGATE_TIMEOUT)
+            .await?;
         self.snapshot().await
     }
 
     /// Evaluates the injected walker and renders its tree as text
     /// (page-snapshot spec: "Injected accessibility-style walker").
     pub async fn snapshot(&self) -> Result<String> {
-        let raw = self.page.evaluate(snapshot::WALKER_JS).await?;
+        let raw = self
+            .active_page()
+            .await
+            .evaluate(snapshot::WALKER_JS)
+            .await?;
         let parsed: SnapshotResult = serde_json::from_value(raw)?;
         Ok(snapshot::render(&parsed))
     }
@@ -368,7 +534,10 @@ impl Session {
             None
         };
 
-        self.page.click_at(coords.x, coords.y).await?;
+        self.active_page()
+            .await
+            .click_at(coords.x, coords.y)
+            .await?;
         *self.mouse_pos.lock().await = (coords.x, coords.y);
         Ok(seed)
     }
@@ -415,7 +584,7 @@ impl Session {
                     let timeline = motion::typing_timeline(text, &Persona::fast(), &mut rng);
                     self.dispatch_typing_true_input(&timeline).await?;
                 } else {
-                    self.page.insert_text(text).await?;
+                    self.active_page().await.insert_text(text).await?;
                 }
                 None
             }
@@ -434,7 +603,8 @@ impl Session {
                 .press_true_input(spec.windows_virtual_key_code as u16)
                 .await;
         }
-        self.page
+        self.active_page()
+            .await
             .dispatch_key(spec.key, spec.code, spec.windows_virtual_key_code)
             .await?;
         Ok(())
@@ -450,7 +620,8 @@ impl Session {
         let suppress = self.training_active.load(Ordering::SeqCst);
         if suppress {
             let _ = self
-                .page
+                .active_page()
+                .await
                 .evaluate("window.__aibSuppressTraining = true")
                 .await;
         }
@@ -460,7 +631,8 @@ impl Session {
     async fn end_training_suppression(&self, was_suppressing: bool) {
         if was_suppressing {
             let _ = self
-                .page
+                .active_page()
+                .await
                 .evaluate("window.__aibSuppressTraining = false")
                 .await;
         }
@@ -510,7 +682,7 @@ impl Session {
     }
 
     pub async fn screenshot(&self) -> Result<Vec<u8>> {
-        Ok(self.page.screenshot().await?)
+        Ok(self.active_page().await.screenshot().await?)
     }
 
     /// Parses and executes a YAML script's steps in order against this
@@ -538,13 +710,16 @@ impl Session {
         let recordings_base = cdp::launch::profile_base_dir()?
             .join("aib")
             .join("recordings");
-        Recording::start(&self.page, options, recordings_base).await
+        let page = self.active_page().await;
+        Recording::start(&page, options, recordings_base).await
     }
 
-    /// Tears the session down: page, context, and (if we launched it) the
-    /// browser process.
+    /// Tears the session down: every attached page, the context, and (if we
+    /// launched it) the browser process.
     pub async fn close(mut self) -> Result<()> {
-        let _ = self.page.close().await;
+        for page in self.pages.lock().await.values() {
+            let _ = page.close().await;
+        }
         let _ = self.context.dispose().await;
         if let Some(launched) = self.launched.take() {
             launched.shutdown().await?;
@@ -557,13 +732,14 @@ impl Session {
     /// them back to back (human-motion spec: "timelines are computed up
     /// front, then dispatched with real pacing").
     async fn walk_mouse_path(&self, path: &[motion::TimedPoint]) -> Result<()> {
+        let page = self.active_page().await;
         let mut last_ms = 0.0;
         for point in path {
             let delta = (point.at_ms - last_ms).max(0.0);
             if delta > 0.0 {
                 tokio::time::sleep(Duration::from_secs_f64(delta / 1000.0)).await;
             }
-            self.page.move_mouse_to(point.x, point.y).await?;
+            page.move_mouse_to(point.x, point.y).await?;
             last_ms = point.at_ms;
         }
         Ok(())
@@ -571,13 +747,14 @@ impl Session {
 
     /// Dispatches a synthesized typing timeline with real pacing.
     async fn dispatch_typing(&self, timeline: &[motion::TimedKey]) -> Result<()> {
+        let page = self.active_page().await;
         let mut last_ms = 0.0;
         for key in timeline {
             let delta = (key.at_ms - last_ms).max(0.0);
             if delta > 0.0 {
                 tokio::time::sleep(Duration::from_secs_f64(delta / 1000.0)).await;
             }
-            self.page.dispatch_char(key.ch).await?;
+            page.dispatch_char(key.ch).await?;
             last_ms = key.at_ms;
         }
         Ok(())
@@ -619,7 +796,11 @@ impl Session {
             inner_height: f64,
             device_pixel_ratio: f64,
         }
-        let raw = self.page.evaluate(WINDOW_GEOMETRY_JS).await?;
+        let raw = self
+            .active_page()
+            .await
+            .evaluate(WINDOW_GEOMETRY_JS)
+            .await?;
         let g: Geom = serde_json::from_value(raw)?;
         Ok(cdp::os_input::WindowGeometry {
             screen_x: g.screen_x,
@@ -642,7 +823,7 @@ impl Session {
     /// most closely match this hint.
     #[cfg(windows)]
     async fn window_hint(&self) -> Result<cdp::os_input::WindowHint> {
-        let bounds = self.page.window_bounds().await?.bounds;
+        let bounds = self.active_page().await.window_bounds().await?.bounds;
         let (Some(left), Some(top), Some(width), Some(height)) =
             (bounds.left, bounds.top, bounds.width, bounds.height)
         else {
@@ -772,7 +953,7 @@ impl Session {
 
     async fn resolve_ref(&self, r#ref: &str) -> Result<ResolveResult> {
         let script = format!("({RESOLVE_JS})({})", serde_json::to_string(r#ref)?);
-        let raw = self.page.evaluate(&script).await?;
+        let raw = self.active_page().await.evaluate(&script).await?;
         Ok(serde_json::from_value(raw)?)
     }
 

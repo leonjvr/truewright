@@ -9,6 +9,7 @@ use crate::protocol::{browser, fetch, input, network, page, runtime, target};
 use crate::session::{CdpEvent, EventItem, EventStream, Session};
 use base64::Engine;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 pub struct Browser {
     conn: Connection,
@@ -33,10 +34,25 @@ impl Browser {
             .session
             .execute::<target::CreateBrowserContext>(Default::default())
             .await?;
+
+        // Subscribed before enabling discovery so there's no gap a fast
+        // popup could fall through (popup-auto-attach spec: browser-wide,
+        // observe-only discovery -- see design.md addendum for why not
+        // `Target.setAutoAttach`).
+        let created_events = self.session.events::<target::TargetCreated>();
+        let destroyed_events = self.session.events::<target::TargetDestroyed>();
+        self.session
+            .execute::<target::SetDiscoverTargets>(target::SetDiscoverTargetsParams {
+                discover: true,
+            })
+            .await?;
+
         Ok(BrowserContext {
             conn: self.conn.clone(),
             session: self.session.clone(),
             context_id: resp.browser_context_id,
+            created_events: Mutex::new(created_events),
+            destroyed_events: Mutex::new(destroyed_events),
         })
     }
 }
@@ -45,9 +61,15 @@ pub struct BrowserContext {
     conn: Connection,
     session: Session,
     context_id: String,
+    created_events: Mutex<EventStream<target::TargetCreated>>,
+    destroyed_events: Mutex<EventStream<target::TargetDestroyed>>,
 }
 
 impl BrowserContext {
+    pub fn context_id(&self) -> &str {
+        &self.context_id
+    }
+
     pub async fn new_page(&self, url: &str) -> Result<Page> {
         let created = self
             .session
@@ -57,10 +79,17 @@ impl BrowserContext {
             })
             .await?;
 
+        self.attach_existing_target(created.target_id).await
+    }
+
+    /// Attaches to a target that already exists -- either just created by
+    /// `new_page`, or noticed via a `Target.targetCreated` discovery event
+    /// (popup-auto-attach spec).
+    pub async fn attach_existing_target(&self, target_id: String) -> Result<Page> {
         let attached = self
             .session
             .execute::<target::AttachToTarget>(target::AttachToTargetParams {
-                target_id: created.target_id.clone(),
+                target_id: target_id.clone(),
                 flatten: true,
             })
             .await?;
@@ -81,8 +110,34 @@ impl BrowserContext {
         Ok(Page {
             browser_session: self.session.clone(),
             session: page_session,
-            target_id: created.target_id,
+            target_id,
         })
+    }
+
+    /// Non-blocking drain of newly discovered targets since the last poll
+    /// (popup-auto-attach spec).
+    pub async fn poll_created_targets(&self) -> Vec<target::TargetCreated> {
+        let mut stream = self.created_events.lock().await;
+        let mut out = Vec::new();
+        while let Some(item) = stream.try_next() {
+            if let EventItem::Event(ev) = item {
+                out.push(ev);
+            }
+        }
+        out
+    }
+
+    /// Non-blocking drain of destroyed targets since the last poll
+    /// (popup-auto-attach spec).
+    pub async fn poll_destroyed_targets(&self) -> Vec<target::TargetDestroyed> {
+        let mut stream = self.destroyed_events.lock().await;
+        let mut out = Vec::new();
+        while let Some(item) = stream.try_next() {
+            if let EventItem::Event(ev) = item {
+                out.push(ev);
+            }
+        }
+        out
     }
 
     /// Disposes this context (browser-attach spec: "Clean teardown").
@@ -104,6 +159,23 @@ pub struct Page {
 }
 
 impl Page {
+    pub fn target_id(&self) -> &str {
+        &self.target_id
+    }
+
+    /// Fresh URL/title for this page from CDP itself (popup-auto-attach
+    /// spec: `browser_list_pages`), rather than relying on possibly-stale
+    /// info captured at attach time.
+    pub async fn target_info(&self) -> Result<target::TargetInfo> {
+        let resp = self
+            .browser_session
+            .execute::<target::GetTargetInfo>(target::GetTargetInfoParams {
+                target_id: self.target_id.clone(),
+            })
+            .await?;
+        Ok(resp.target_info)
+    }
+
     /// Navigates and waits for the `load` lifecycle milestone, event-driven
     /// (no polling) and raced against `timeout` (cdp-client spec:
     /// "Navigation-complete semantics").

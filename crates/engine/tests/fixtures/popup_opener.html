@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Popup Opener</title></head>
+<body>
+  <main>
+    <h1>Sign in</h1>
+    <button id="oauth-link" type="button">Sign in with Example</button>
+  </main>
+  <script>
+    document.getElementById('oauth-link').addEventListener('click', function () {
+      window.open('popup_target.html', '_blank');
+    });
+  </script>
+</body>
+</html>

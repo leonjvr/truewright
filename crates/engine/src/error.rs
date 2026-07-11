@@ -79,6 +79,11 @@ pub enum EngineError {
 
     #[error("real OS input dispatch failed: {0}")]
     TrueInput(String),
+
+    #[error(
+        "no attached page with id {0:?}; call browser_list_pages to see currently attached pages"
+    )]
+    UnknownPage(String),
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;

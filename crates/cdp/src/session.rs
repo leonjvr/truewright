@@ -110,4 +110,33 @@ impl<E: CdpEvent> EventStream<E> {
             }
         }
     }
+
+    /// Non-blocking drain: returns the next already-buffered event matching
+    /// `E::METHOD`, or `None` if nothing is pending right now (popup-attach
+    /// spec Decision #2 -- this project has no persistent event loop, so
+    /// callers poll this at the point they actually want to know "has
+    /// anything new arrived", rather than a background task pushing state).
+    pub fn try_next(&mut self) -> Option<EventItem<E>> {
+        loop {
+            match self.rx.try_recv() {
+                Ok(raw) => {
+                    if raw.method != E::METHOD {
+                        continue;
+                    }
+                    match serde_json::from_value::<E>(raw.params) {
+                        Ok(ev) => return Some(EventItem::Event(ev)),
+                        Err(e) => {
+                            tracing::warn!(error = %e, method = %raw.method, "failed to decode CDP event");
+                            continue;
+                        }
+                    }
+                }
+                Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                    return Some(EventItem::Lagged(LagInfo { skipped }));
+                }
+                Err(broadcast::error::TryRecvError::Empty)
+                | Err(broadcast::error::TryRecvError::Closed) => return None,
+            }
+        }
+    }
 }

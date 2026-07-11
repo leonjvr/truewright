@@ -1,4 +1,4 @@
-use crate::session::Command;
+use crate::session::{CdpEvent, Command};
 use serde::{Deserialize, Serialize};
 
 pub struct CreateBrowserContext;
@@ -91,4 +91,73 @@ pub struct CloseTargetParams {
 #[derive(Debug, Deserialize)]
 pub struct CloseTargetResponse {
     pub success: bool,
+}
+
+pub struct GetTargetInfo;
+impl Command for GetTargetInfo {
+    const METHOD: &'static str = "Target.getTargetInfo";
+    type Params = GetTargetInfoParams;
+    type Response = GetTargetInfoResponse;
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetTargetInfoParams {
+    pub target_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetTargetInfoResponse {
+    pub target_info: TargetInfo,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetInfo {
+    pub target_id: String,
+    #[serde(rename = "type")]
+    pub target_type: String,
+    pub title: String,
+    pub url: String,
+    #[serde(default)]
+    pub browser_context_id: Option<String>,
+}
+
+/// Browser-wide, observe-only target discovery (popup-auto-attach spec:
+/// "Automatic attach to new top-level targets"). Deliberately not
+/// `Target.setAutoAttach`: that has CDP auto-create/manage sessions itself,
+/// which conflicts with this project's own explicit
+/// `createTarget`/`attachToTarget` flow for the primary page (confirmed via
+/// live testing -- see design.md addendum). Discovery only *notifies*;
+/// attaching remains this client's own explicit decision either way.
+pub struct SetDiscoverTargets;
+impl Command for SetDiscoverTargets {
+    const METHOD: &'static str = "Target.setDiscoverTargets";
+    type Params = SetDiscoverTargetsParams;
+    type Response = super::EmptyResponse;
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetDiscoverTargetsParams {
+    pub discover: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetCreated {
+    pub target_info: TargetInfo,
+}
+impl CdpEvent for TargetCreated {
+    const METHOD: &'static str = "Target.targetCreated";
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetDestroyed {
+    pub target_id: String,
+}
+impl CdpEvent for TargetDestroyed {
+    const METHOD: &'static str = "Target.targetDestroyed";
 }

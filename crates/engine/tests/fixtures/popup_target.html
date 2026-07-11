@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>OAuth Provider</title></head>
+<body>
+  <main>
+    <h1>Sign in - Example</h1>
+    <button id="approve" type="button">Approve</button>
+    <p id="status"></p>
+  </main>
+  <script>
+    document.getElementById('approve').addEventListener('click', function () {
+      document.getElementById('status').textContent = 'Approved';
+      window.close();
+    });
+  </script>
+</body>
+</html>
