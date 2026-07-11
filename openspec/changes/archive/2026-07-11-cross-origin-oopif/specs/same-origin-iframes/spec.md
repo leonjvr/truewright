@@ -7,7 +7,7 @@ The engine SHALL render a cross-origin iframe backed by an attachable Out-Of-Pro
 - **WHEN** `browser_snapshot` is called on a page containing a cross-origin `<iframe>` that Chrome has isolated into its own OOPIF target
 - **THEN** the rendered snapshot includes that iframe's actual interactive content (with namespaced refs) nested under an `iframe` entry, not a "not inspectable" placeholder
 
-#### Scenario: A cross-origin iframe with no attachable OOPIF is shown as a boundary, not silence
+#### Scenario: A cross-origin iframe is shown as a boundary, not silence
 - **WHEN** `browser_snapshot` is called on a page containing a cross-origin `<iframe>` that has no correlated, attached OOPIF target (e.g. an opaque-origin `data:` URL, which Chrome never promotes to its own process)
 - **THEN** the rendered snapshot includes a node for it indicating it isn't inspectable, distinguishable from both same-origin content and OOPIF content
 

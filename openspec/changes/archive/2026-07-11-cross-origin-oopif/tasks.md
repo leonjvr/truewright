@@ -33,5 +33,5 @@
 ## 7. Wrap-up
 - [x] 7.1 Update README (OOPIF support, ref namespacing, what's still deferred)
 - [x] 7.2 Update PROPOSAL.md's Phase 5 roadmap
-- [ ] 7.3 `openspec archive cross-origin-oopif -y`
-- [ ] 7.4 Three commits: Propose, Implement, Sync-specs-and-archive
+- [x] 7.3 `openspec archive cross-origin-oopif -y`
+- [x] 7.4 Three commits: Propose, Implement, Sync-specs-and-archive
