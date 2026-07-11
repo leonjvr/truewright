@@ -1,6 +1,6 @@
 mod doctor;
-mod mcp;
 
+use aib::mcp;
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
@@ -61,6 +61,17 @@ enum Command {
         /// Browser selection for headless runs.
         #[arg(long, value_enum, default_value_t = BrowserArg::Auto)]
         browser: BrowserArg,
+        /// Serve over loopback HTTP (bearer-token authenticated) instead of
+        /// stdio (mcp-streamable-http spec).
+        #[arg(long)]
+        http: bool,
+        /// Port for --http mode. Always binds 127.0.0.1 only.
+        #[arg(long, default_value_t = 8787)]
+        port: u16,
+        /// Bearer token for --http mode. A random one is generated and
+        /// printed once if not given.
+        #[arg(long)]
+        token: Option<String>,
     },
 }
 
@@ -87,6 +98,18 @@ async fn main() -> std::process::ExitCode {
             );
             doctor::run(json, !headed, installed_only).await
         }
-        Command::Mcp { headed, browser } => mcp::run(!headed, browser.into()).await,
+        Command::Mcp {
+            headed,
+            browser,
+            http,
+            port,
+            token,
+        } => {
+            if http {
+                mcp::run_http(!headed, browser.into(), port, token).await
+            } else {
+                mcp::run(!headed, browser.into()).await
+            }
+        }
     }
 }

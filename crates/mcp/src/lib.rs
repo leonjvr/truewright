@@ -205,6 +205,13 @@ pub struct AibTools {
     console_capture: Arc<Mutex<Option<engine::ConsoleCapture>>>,
     headless: bool,
     browser_pref: cdp::launch::BrowserPreference,
+    /// The `Session::launch` profile-directory name. Fixed at `"aib-mcp"`
+    /// for stdio (one process, one profile, never a collision risk);
+    /// streamable-HTTP mode gives each session its own randomly-suffixed
+    /// name instead, since multiple concurrent sessions could otherwise
+    /// collide on the same Chrome user-data directory (mcp-streamable-http
+    /// spec: "Independent per-session browser").
+    profile_name: String,
     // Read by the `#[tool_handler]`-generated `ServerHandler` impl to route
     // incoming `tools/call` requests to the methods below.
     #[allow(dead_code)]
@@ -218,6 +225,17 @@ impl AibTools {
     }
 
     pub fn with_browser_pref(headless: bool, browser_pref: cdp::launch::BrowserPreference) -> Self {
+        Self::with_profile_name(headless, browser_pref, "aib-mcp".to_string())
+    }
+
+    /// As `with_browser_pref`, but with an explicit profile-directory name
+    /// instead of the fixed `"aib-mcp"` default -- used by streamable-HTTP
+    /// mode to give each session its own isolated profile.
+    pub fn with_profile_name(
+        headless: bool,
+        browser_pref: cdp::launch::BrowserPreference,
+        profile_name: String,
+    ) -> Self {
         Self {
             session: Arc::new(Mutex::new(None)),
             recording: Arc::new(Mutex::new(None)),
@@ -227,6 +245,7 @@ impl AibTools {
             console_capture: Arc::new(Mutex::new(None)),
             headless,
             browser_pref,
+            profile_name,
             tool_router: Self::tool_router(),
         }
     }
@@ -234,9 +253,10 @@ impl AibTools {
     async fn ensure_session(&self) -> Result<(), McpError> {
         let mut guard = self.session.lock().await;
         if guard.is_none() {
-            let session = engine::Session::launch_with("aib-mcp", self.headless, self.browser_pref)
-                .await
-                .map_err(map_engine_err)?;
+            let session =
+                engine::Session::launch_with(&self.profile_name, self.headless, self.browser_pref)
+                    .await
+                    .map_err(map_engine_err)?;
             *guard = Some(session);
         }
         Ok(())
