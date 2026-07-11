@@ -23,6 +23,9 @@ pub enum EngineError {
     #[error("unknown key: {0:?}")]
     UnknownKey(String),
 
+    #[error("unknown persona: {0:?} (expected one of: careful, average, fast)")]
+    UnknownPersona(String),
+
     #[error(transparent)]
     Cdp(#[from] cdp::CdpError),
 

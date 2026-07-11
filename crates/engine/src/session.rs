@@ -1,9 +1,11 @@
 use crate::error::{EngineError, Result};
 use crate::keys;
+use crate::motion::{self, Persona};
 use crate::recording::{Recording, RecordingOptions};
 use crate::snapshot::{self, SnapshotResult};
 use serde::Deserialize;
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 const RESOLVE_JS: &str = include_str!("../assets/resolve.js");
 
@@ -21,6 +23,18 @@ pub struct Session {
     launched: Option<cdp::launch::LaunchedBrowser>,
     context: cdp::ops::BrowserContext,
     page: cdp::ops::Page,
+    /// Last dispatched mouse position, so a human-like move starts from
+    /// wherever the cursor actually is instead of teleporting (human-motion
+    /// spec: "Curved, timed mouse movement to a target").
+    mouse_pos: Mutex<(f64, f64)>,
+}
+
+/// Requests a human-like (curved mouse path / paced typing cadence) variant
+/// of an action instead of the default instant dispatch (human-motion spec).
+pub struct HumanLike {
+    pub persona: Persona,
+    /// Fixed for reproducibility; a fresh random seed is drawn if `None`.
+    pub seed: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,6 +55,8 @@ struct ResolveResult {
 struct Coordinates {
     x: f64,
     y: f64,
+    width: f64,
+    height: f64,
 }
 
 impl Session {
@@ -74,7 +90,19 @@ impl Session {
             launched: Some(launched),
             context,
             page,
+            mouse_pos: Mutex::new((0.0, 0.0)),
         })
+    }
+
+    /// Looks up a built-in persona by name, for callers (the MCP layer)
+    /// turning a request's `persona` string into a typed engine error rather
+    /// than silently falling back to a default (human-motion spec: "Persona
+    /// presets").
+    // EngineError is kept as one flat enum (matches cdp::CdpError's
+    // rationale); see the identical allow in cdp/src/launch.rs.
+    #[allow(clippy::result_large_err)]
+    pub fn persona(name: &str) -> Result<Persona> {
+        Persona::by_name(name).ok_or_else(|| EngineError::UnknownPersona(name.to_string()))
     }
 
     pub async fn navigate(&self, url: &str) -> Result<String> {
@@ -91,22 +119,85 @@ impl Session {
     }
 
     pub async fn click(&self, r#ref: &str) -> Result<()> {
+        self.click_with(r#ref, None).await?;
+        Ok(())
+    }
+
+    /// Human-like variant of `click`: with `human` set, moves the mouse
+    /// along a synthesized curved path (starting from the last known
+    /// position) before pressing, instead of teleporting straight to the
+    /// target (human-motion spec: "Curved, timed mouse movement to a
+    /// target"). Returns the seed used, if human-like mode was requested, so
+    /// the run can be reproduced.
+    pub async fn click_with(&self, r#ref: &str, human: Option<HumanLike>) -> Result<Option<u64>> {
         let coords = self
             .resolve_actionable(r#ref, DEFAULT_ACTION_TIMEOUT)
             .await?;
+
+        let seed = if let Some(HumanLike { persona, seed }) = human {
+            let seed = seed.unwrap_or_else(rand_seed);
+            let mut rng = motion::seeded_rng(seed);
+            let from = *self.mouse_pos.lock().await;
+            let target_size = coords.width.max(coords.height).max(1.0);
+            let path = motion::mouse_path(from, (coords.x, coords.y), target_size, &persona, &mut rng);
+            self.walk_mouse_path(&path).await?;
+            Some(seed)
+        } else {
+            None
+        };
+
         self.page.click_at(coords.x, coords.y).await?;
-        Ok(())
+        *self.mouse_pos.lock().await = (coords.x, coords.y);
+        Ok(seed)
     }
 
     /// Clicks to focus, then inserts text (browser-actions spec: "Type by
     /// ref"). `submit` additionally presses Enter afterward.
     pub async fn type_text(&self, r#ref: &str, text: &str, submit: bool) -> Result<()> {
-        self.click(r#ref).await?;
-        self.page.insert_text(text).await?;
+        self.type_text_with(r#ref, text, submit, None).await?;
+        Ok(())
+    }
+
+    /// Human-like variant of `type_text`: with `human` set, clicks to focus
+    /// via a human-like mouse path, then dispatches one `char` event per
+    /// character with a persona-derived, non-uniform delay between them
+    /// (human-motion spec: "Per-character typing cadence"). Returns the
+    /// seed used, if human-like mode was requested.
+    pub async fn type_text_with(
+        &self,
+        r#ref: &str,
+        text: &str,
+        submit: bool,
+        human: Option<HumanLike>,
+    ) -> Result<Option<u64>> {
+        let seed = match human {
+            Some(HumanLike { persona, seed }) => {
+                let seed = seed.unwrap_or_else(rand_seed);
+                self.click_with(
+                    r#ref,
+                    Some(HumanLike {
+                        persona,
+                        seed: Some(seed),
+                    }),
+                )
+                .await?;
+
+                let mut rng = motion::seeded_rng(seed);
+                let timeline = motion::typing_timeline(text, &persona, &mut rng);
+                self.dispatch_typing(&timeline).await?;
+                Some(seed)
+            }
+            None => {
+                self.click(r#ref).await?;
+                self.page.insert_text(text).await?;
+                None
+            }
+        };
+
         if submit {
             self.press("Enter").await?;
         }
-        Ok(())
+        Ok(seed)
     }
 
     pub async fn press(&self, key: &str) -> Result<()> {
@@ -161,6 +252,37 @@ impl Session {
         Ok(())
     }
 
+    /// Dispatches a synthesized mouse path with real pacing: sleeps between
+    /// points for the delta in their `at_ms` timestamps rather than firing
+    /// them back to back (human-motion spec: "timelines are computed up
+    /// front, then dispatched with real pacing").
+    async fn walk_mouse_path(&self, path: &[motion::TimedPoint]) -> Result<()> {
+        let mut last_ms = 0.0;
+        for point in path {
+            let delta = (point.at_ms - last_ms).max(0.0);
+            if delta > 0.0 {
+                tokio::time::sleep(Duration::from_secs_f64(delta / 1000.0)).await;
+            }
+            self.page.move_mouse_to(point.x, point.y).await?;
+            last_ms = point.at_ms;
+        }
+        Ok(())
+    }
+
+    /// Dispatches a synthesized typing timeline with real pacing.
+    async fn dispatch_typing(&self, timeline: &[motion::TimedKey]) -> Result<()> {
+        let mut last_ms = 0.0;
+        for key in timeline {
+            let delta = (key.at_ms - last_ms).max(0.0);
+            if delta > 0.0 {
+                tokio::time::sleep(Duration::from_secs_f64(delta / 1000.0)).await;
+            }
+            self.page.dispatch_char(key.ch).await?;
+            last_ms = key.at_ms;
+        }
+        Ok(())
+    }
+
     async fn resolve_ref(&self, r#ref: &str) -> Result<ResolveResult> {
         let script = format!("({RESOLVE_JS})({})", serde_json::to_string(r#ref)?);
         let raw = self.page.evaluate(&script).await?;
@@ -186,6 +308,8 @@ impl Session {
                         return Ok(Coordinates {
                             x: resolved.x,
                             y: resolved.y,
+                            width: resolved.width,
+                            height: resolved.height,
                         });
                     }
                 }
@@ -204,6 +328,11 @@ impl Session {
             tokio::time::sleep(ACTIONABILITY_POLL_INTERVAL).await;
         }
     }
+}
+
+fn rand_seed() -> u64 {
+    use rand::Rng;
+    rand::thread_rng().gen()
 }
 
 fn rects_close(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> bool {

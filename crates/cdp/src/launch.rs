@@ -275,6 +275,16 @@ pub async fn launch(
         .arg("--no-default-browser-check")
         .arg("--remote-allow-origins=*")
         .arg("--disable-background-networking")
+        // Without these, Chrome throttles compositor-frame-dependent work
+        // (including the ack for Input.dispatch*Event) to ~once per 5s for
+        // any window that isn't OS-focused/visible — which every launch
+        // here is, since nothing calls Target.activateTarget. Confirmed via
+        // per-call timing instrumentation during human-motion's headed demo:
+        // every dispatchMouseEvent took ~5000ms until these were added.
+        // Puppeteer/Playwright set the same three flags for this reason.
+        .arg("--disable-backgrounding-occluded-windows")
+        .arg("--disable-renderer-backgrounding")
+        .arg("--disable-background-timer-throttling")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .stdin(std::process::Stdio::null());

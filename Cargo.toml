@@ -24,6 +24,8 @@ ureq = { version = "3", features = ["json"] }
 zip = { version = "6", default-features = false, features = ["deflate"] }
 sysinfo = "0.37"
 image = { version = "0.25", default-features = false, features = ["jpeg", "gif"] }
+rand = "0.8"
+rand_pcg = "0.3"
 
 [package]
 name = "aib"

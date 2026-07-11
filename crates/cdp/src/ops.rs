@@ -198,6 +198,37 @@ impl Page {
         Ok(())
     }
 
+    /// Dispatches a single `mouseMoved` event, for human-motion's curved,
+    /// timed mouse paths (browser-actions / human-motion spec).
+    pub async fn move_mouse_to(&self, x: f64, y: f64) -> Result<()> {
+        self.session
+            .execute::<input::DispatchMouseEvent>(input::DispatchMouseEventParams {
+                kind: "mouseMoved".to_string(),
+                x,
+                y,
+                button: None,
+                click_count: None,
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Dispatches a single `char` key event carrying `ch`, for human-motion's
+    /// per-character typing cadence (extends `dispatch_key`'s named-key-only
+    /// keyDown/keyUp pair to arbitrary Unicode characters).
+    pub async fn dispatch_char(&self, ch: char) -> Result<()> {
+        self.session
+            .execute::<input::DispatchKeyEvent>(input::DispatchKeyEventParams {
+                kind: "char".to_string(),
+                key: None,
+                code: None,
+                windows_virtual_key_code: None,
+                text: Some(ch.to_string()),
+            })
+            .await?;
+        Ok(())
+    }
+
     /// Dispatches a keyDown/keyUp pair for a named key.
     pub async fn dispatch_key(
         &self,

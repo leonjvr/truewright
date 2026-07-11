@@ -18,6 +18,19 @@ pub struct NavigateRequest {
 pub struct RefRequest {
     #[schemars(description = "Element ref from a snapshot, e.g. \"e6\"")]
     pub r#ref: String,
+    #[serde(default)]
+    #[schemars(
+        description = "Move the mouse along a synthesized human-like curved path before clicking, instead of teleporting to the target (default false)"
+    )]
+    pub human_like: bool,
+    #[serde(default)]
+    #[schemars(
+        description = "Persona for human_like motion: one of careful, average, fast (default average)"
+    )]
+    pub persona: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Fixed seed for reproducible human_like motion (default: random)")]
+    pub seed: Option<u64>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -29,6 +42,19 @@ pub struct TypeRequest {
     #[serde(default)]
     #[schemars(description = "Press Enter after inserting the text")]
     pub submit: bool,
+    #[serde(default)]
+    #[schemars(
+        description = "Move to the field with a human-like curved path and type character-by-character with human-like pauses, instead of an instant click + bulk insert (default false)"
+    )]
+    pub human_like: bool,
+    #[serde(default)]
+    #[schemars(
+        description = "Persona for human_like motion: one of careful, average, fast (default average)"
+    )]
+    pub persona: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Fixed seed for reproducible human_like motion (default: random)")]
+    pub seed: Option<u64>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -120,22 +146,34 @@ impl AibTools {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "Click an element by its ref from the last snapshot")]
+    #[tool(
+        description = "Click an element by its ref from the last snapshot. Set human_like to move the mouse along a curved path first, like a real user."
+    )]
     async fn browser_click(
         &self,
-        Parameters(RefRequest { r#ref }): Parameters<RefRequest>,
+        Parameters(RefRequest {
+            r#ref,
+            human_like,
+            persona,
+            seed,
+        }): Parameters<RefRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.ensure_session().await?;
         let guard = self.session.lock().await;
         let session = guard.as_ref().ok_or_else(no_session_error)?;
-        session.click(&r#ref).await.map_err(map_engine_err)?;
+        let human = build_human_like(human_like, persona, seed)?;
+        let used_seed = session
+            .click_with(&r#ref, human)
+            .await
+            .map_err(map_engine_err)?;
         Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "clicked {ref}. Call browser_snapshot to see any resulting changes."
+            "clicked {ref}{}. Call browser_snapshot to see any resulting changes.",
+            seed_suffix(used_seed)
         ))]))
     }
 
     #[tool(
-        description = "Click an element by ref, then type text into it (optionally submit with Enter)"
+        description = "Click an element by ref, then type text into it (optionally submit with Enter). Set human_like to move to it and type character-by-character with human-like pauses."
     )]
     async fn browser_type(
         &self,
@@ -143,17 +181,22 @@ impl AibTools {
             r#ref,
             text,
             submit,
+            human_like,
+            persona,
+            seed,
         }): Parameters<TypeRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.ensure_session().await?;
         let guard = self.session.lock().await;
         let session = guard.as_ref().ok_or_else(no_session_error)?;
-        session
-            .type_text(&r#ref, &text, submit)
+        let human = build_human_like(human_like, persona, seed)?;
+        let used_seed = session
+            .type_text_with(&r#ref, &text, submit, human)
             .await
             .map_err(map_engine_err)?;
         Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "typed into {ref}. Call browser_snapshot to see any resulting changes."
+            "typed into {ref}{}. Call browser_snapshot to see any resulting changes.",
+            seed_suffix(used_seed)
         ))]))
     }
 
@@ -299,22 +342,55 @@ impl ServerHandler for AibTools {
             .with_server_info(Implementation::from_build_env())
             .with_instructions(
                 "Drives a real Chrome/Edge browser. Tools: browser_navigate(url), \
-                 browser_snapshot(), browser_click(ref), browser_type(ref, text, submit?), \
+                 browser_snapshot(), browser_click(ref, human_like?, persona?, seed?), \
+                 browser_type(ref, text, submit?, human_like?, persona?, seed?), \
                  browser_press(key), browser_wait_for(text, timeout_ms?), browser_screenshot(), \
                  browser_record_start(max_duration_ms?, quality?), browser_record_stop(), \
                  browser_close(). Refs come from the snapshot text, e.g. `[e6]` -> ref \"e6\". \
                  Actions do not auto-return a new snapshot; call browser_snapshot again after \
                  an action that may have changed the page. Use browser_record_start/stop to \
-                 capture a short GIF of moving/animated parts instead of a single screenshot."
+                 capture a short GIF of moving/animated parts instead of a single screenshot. \
+                 Set human_like: true on browser_click/browser_type to move the mouse along a \
+                 curved path and type character-by-character with human-like pauses instead of \
+                 instant dispatch, e.g. for testing an application's bot-detection; persona is \
+                 one of careful/average/fast (default average), and seed reproduces the exact \
+                 same motion/timing on a later call."
                     .to_string(),
             )
+    }
+}
+
+/// Resolves the `human_like`/`persona`/`seed` request fields into an
+/// `engine::HumanLike`, or `None` for the default instant-dispatch path.
+/// Rejects an unknown persona name up front, before any action is taken
+/// (human-motion spec: "Persona presets" — unknown names are a typed error,
+/// never a silent fallback).
+fn build_human_like(
+    human_like: bool,
+    persona: Option<String>,
+    seed: Option<u64>,
+) -> Result<Option<engine::HumanLike>, McpError> {
+    if !human_like {
+        return Ok(None);
+    }
+    let persona_name = persona.as_deref().unwrap_or("average");
+    let persona = engine::Session::persona(persona_name).map_err(map_engine_err)?;
+    Ok(Some(engine::HumanLike { persona, seed }))
+}
+
+fn seed_suffix(seed: Option<u64>) -> String {
+    match seed {
+        Some(seed) => format!(" (human-like, seed={seed})"),
+        None => String::new(),
     }
 }
 
 fn map_engine_err(e: engine::EngineError) -> McpError {
     use engine::EngineError::*;
     match e {
-        StaleRef(_) | UnknownKey(_) => McpError::invalid_params(e.to_string(), None),
+        StaleRef(_) | UnknownKey(_) | UnknownPersona(_) => {
+            McpError::invalid_params(e.to_string(), None)
+        }
         ActionTimeout { .. } | WaitTimeout { .. } | Cdp(_) | Serde(_) | Recording(_) => {
             McpError::internal_error(e.to_string(), None)
         }
