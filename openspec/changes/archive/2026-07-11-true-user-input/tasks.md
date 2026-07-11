@@ -26,5 +26,5 @@
 ## 5. Wrap-up
 - [x] 5.1 Update README with the `true_input` parameter, its Windows-only/headed-only caveats, and the real-OS-side-effect warning
 - [x] 5.2 Update PROPOSAL.md's Phase 4 roadmap row with verified exit-criteria evidence
-- [ ] 5.3 `openspec archive true-user-input -y`, fix any "Purpose: TBD" placeholder in the synced spec
-- [ ] 5.4 Three commits: Propose, Implement, Sync-specs-and-archive
+- [x] 5.3 `openspec archive true-user-input -y`, fix any "Purpose: TBD" placeholder in the synced spec
+- [x] 5.4 Three commits: Propose, Implement, Sync-specs-and-archive
