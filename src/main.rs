@@ -2,6 +2,7 @@ mod doctor;
 
 use aib::mcp;
 use clap::{Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
@@ -78,6 +79,26 @@ enum Command {
         #[command(subcommand)]
         action: TraceCommand,
     },
+    /// LLM provider/role config utilities (llm-providers spec).
+    Llm {
+        #[command(subcommand)]
+        action: LlmCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum LlmCommand {
+    /// Resolves a configured role and sends one trivial completion, to
+    /// verify the provider/model/credential are actually reachable --
+    /// prints the model, round-trip latency, and the reply.
+    Ping {
+        /// Role name from `[roles]` in the config file (e.g. "driver").
+        role: String,
+        /// Explicit config file path, overriding AIB_CONFIG / ./aib.toml /
+        /// the per-user data dir default.
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -138,5 +159,60 @@ async fn main() -> std::process::ExitCode {
                 }
             },
         },
+        Command::Llm { action } => match action {
+            LlmCommand::Ping { role, config } => llm_ping(&role, config).await,
+        },
+    }
+}
+
+/// Resolves `role` from config and sends one trivial completion, printing
+/// model/latency/reply -- the live-verification hook for the llm-providers
+/// change (no browser session involved at all).
+async fn llm_ping(role: &str, config_path: Option<PathBuf>) -> std::process::ExitCode {
+    let aib_data_dir = match cdp::launch::profile_base_dir() {
+        Ok(dir) => dir.join("aib"),
+        Err(e) => {
+            eprintln!("failed to resolve per-user data directory: {e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+
+    let config = match llm::Config::load(&aib_data_dir, config_path.as_deref()) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("failed to load config: {e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+
+    let role_client = match config.resolve_role(role) {
+        Ok(rc) => rc,
+        Err(e) => {
+            eprintln!("failed to resolve role {role:?}: {e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+
+    let req = llm::ChatRequest {
+        model: String::new(), // RoleClient::complete fills in the configured model
+        messages: vec![
+            llm::Message::system("You are a terse connectivity test. Reply with exactly one word."),
+            llm::Message::user("Reply with exactly: pong"),
+        ],
+        tools: vec![],
+    };
+
+    let start = std::time::Instant::now();
+    match role_client.complete(req).await {
+        Ok(resp) => {
+            let elapsed = start.elapsed();
+            println!("role={role} model={} latency={elapsed:?}", role_client.model);
+            println!("reply: {}", resp.message.text());
+            std::process::ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("ping failed: {e}");
+            std::process::ExitCode::FAILURE
+        }
     }
 }
