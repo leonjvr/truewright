@@ -23,5 +23,5 @@
 ## 5. Wrap-up
 - [x] 5.1 Update README (env var + new CI job, with the "not yet observed running" caveat)
 - [x] 5.2 Update PROPOSAL.md's Phase 5 roadmap
-- [ ] 5.3 `openspec archive weekly-chrome-beta-ci -y`, fix any "Purpose: TBD" placeholder in the synced spec (there shouldn't be one -- this is a MODIFIED requirement on an existing spec)
-- [ ] 5.4 Three commits: Propose, Implement, Sync-specs-and-archive
+- [x] 5.3 `openspec archive weekly-chrome-beta-ci -y`, fix any "Purpose: TBD" placeholder in the synced spec (there shouldn't be one -- this is a MODIFIED requirement on an existing spec)
+- [x] 5.4 Three commits: Propose, Implement, Sync-specs-and-archive
