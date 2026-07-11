@@ -29,5 +29,5 @@
 ## 6. Wrap-up
 - [x] 6.1 Update README (new crate, config file, `aib llm ping`)
 - [x] 6.2 Update PROPOSAL.md's roadmap
-- [ ] 6.3 `openspec archive llm-providers -y`
-- [ ] 6.4 Three commits: Propose, Implement, Sync-specs-and-archive
+- [x] 6.3 `openspec archive llm-providers -y`
+- [x] 6.4 Three commits: Propose, Implement, Sync-specs-and-archive
