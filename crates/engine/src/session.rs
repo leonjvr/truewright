@@ -441,6 +441,24 @@ impl Session {
         Ok(self.page.screenshot().await?)
     }
 
+    /// Parses and executes a YAML script's steps in order against this
+    /// session, fail-fast on the first failing step (yaml-runner spec:
+    /// "Declarative YAML step execution").
+    pub async fn run_yaml(&self, source: &str) -> Result<crate::yaml_runner::RunSummary> {
+        crate::yaml_runner::run(self, source).await
+    }
+
+    /// Loads a saved console/action trace by name and converts its action
+    /// entries into a runnable YAML script (yaml-runner spec: "Trace
+    /// export to a runnable YAML script").
+    // EngineError is kept as one flat enum (matches cdp::CdpError's
+    // rationale); see the identical allow in cdp/src/launch.rs.
+    #[allow(clippy::result_large_err)]
+    pub fn export_yaml(name: &str) -> Result<String> {
+        let entries = crate::console::load_trace(name)?;
+        crate::yaml_runner::export(&entries)
+    }
+
     /// Starts a screencast recording (browser-recording spec). Artifacts
     /// land under `<data-dir>/aib/recordings/<id>/` once `Recording::stop`
     /// is called.

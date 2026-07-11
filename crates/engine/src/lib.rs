@@ -13,6 +13,7 @@ pub mod network;
 pub mod recording;
 mod session;
 mod snapshot;
+mod yaml_runner;
 
 pub use console::{ConsoleCapture, ConsoleCaptureSummary, TraceEntry};
 pub use error::{EngineError, Result};
@@ -21,3 +22,4 @@ pub use motion::{Persona, Training};
 pub use network::{Cassette, NetworkRecording, NetworkRecordingSummary, NetworkReplay};
 pub use recording::{Recording, RecordingOptions, RecordingOutput};
 pub use session::{HumanLike, Session};
+pub use yaml_runner::{RunSummary, Step};

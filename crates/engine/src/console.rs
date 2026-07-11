@@ -6,7 +6,7 @@ use crate::error::{EngineError, Result};
 use cdp::ops::Page;
 use cdp::protocol::runtime::{ConsoleApiCalled, ExceptionThrown, RemoteObject};
 use cdp::session::EventItem;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -17,7 +17,7 @@ use tokio::task::JoinHandle;
 /// indefinitely (mirrors `recording.rs`'s `MAX_RECORDING_DURATION`).
 const MAX_CAPTURE_DURATION: Duration = Duration::from_secs(300);
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum TraceEntry {
     Console {
@@ -190,15 +190,25 @@ fn render_arg(obj: &RemoteObject) -> String {
     }
 }
 
+#[allow(clippy::result_large_err)]
+fn traces_dir() -> Result<PathBuf> {
+    Ok(cdp::launch::profile_base_dir()?.join("aib").join("traces"))
+}
+
+#[allow(clippy::result_large_err)]
+fn trace_path(name: &str) -> Result<PathBuf> {
+    Ok(traces_dir()?.join(format!("{name}.jsonl")))
+}
+
 // EngineError is kept as one flat enum (matches cdp::CdpError's rationale);
 // see the identical allow in cdp/src/launch.rs.
 #[allow(clippy::result_large_err)]
 fn save_trace(name: &str, entries: &[TraceEntry]) -> Result<PathBuf> {
-    let dir = cdp::launch::profile_base_dir()?.join("aib").join("traces");
+    let dir = traces_dir()?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| EngineError::Console(format!("failed to create traces dir: {e}")))?;
 
-    let path = dir.join(format!("{name}.jsonl"));
+    let path = trace_path(name)?;
     let mut buf = String::new();
     for entry in entries {
         let line = serde_json::to_string(entry)
@@ -210,4 +220,21 @@ fn save_trace(name: &str, entries: &[TraceEntry]) -> Result<PathBuf> {
         .map_err(|e| EngineError::Console(format!("failed to write {}: {e}", path.display())))?;
 
     Ok(path)
+}
+
+/// Loads a previously-saved trace by name (yaml-runner spec: "Trace
+/// export to a runnable YAML script" reads a trace this way).
+#[allow(clippy::result_large_err)]
+pub fn load_trace(name: &str) -> Result<Vec<TraceEntry>> {
+    let path = trace_path(name)?;
+    let raw = std::fs::read_to_string(&path).map_err(|_| {
+        EngineError::Console(format!("no trace named {name:?} (looked for {})", path.display()))
+    })?;
+    raw.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            serde_json::from_str(l)
+                .map_err(|e| EngineError::Console(format!("failed to parse trace entry: {e}")))
+        })
+        .collect()
 }

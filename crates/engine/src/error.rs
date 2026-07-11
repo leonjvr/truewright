@@ -62,6 +62,17 @@ pub enum EngineError {
         present: bool,
         snapshot_excerpt: String,
     },
+
+    #[error("{0}")]
+    YamlRunner(String),
+
+    #[error("step {step_number} of {total_steps} ({step_kind}) failed: {message}")]
+    YamlStepFailed {
+        step_number: usize,
+        total_steps: usize,
+        step_kind: String,
+        message: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;

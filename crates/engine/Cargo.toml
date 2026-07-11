@@ -15,6 +15,7 @@ base64.workspace = true
 image.workspace = true
 rand.workspace = true
 rand_pcg.workspace = true
+serde_yaml.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "rt", "macros"] }

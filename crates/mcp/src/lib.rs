@@ -130,6 +130,20 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RunYamlRequest {
+    #[schemars(
+        description = "YAML script source: {name?, steps: [{navigate: url}, {click: ref}, {type: {ref, text, submit?}}, {press: key}, {wait_for: {text, timeout_ms?}}, {assert: {text, present?}}]}"
+    )]
+    pub source: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ExportYamlRequest {
+    #[schemars(description = "Name of a trace saved via browser_console_start/stop to export")]
+    pub name: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RecordStartRequest {
     #[serde(default)]
     #[schemars(
@@ -467,6 +481,40 @@ impl AibTools {
         }
     }
 
+    #[tool(
+        description = "Parse and run a YAML script's steps (navigate/click/type/press/wait_for/assert) against the current session, in order. Stops at the first failing step and reports which one."
+    )]
+    async fn browser_run_yaml(
+        &self,
+        Parameters(RunYamlRequest { source }): Parameters<RunYamlRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_session().await?;
+        let guard = self.session.lock().await;
+        let session = guard.as_ref().ok_or_else(no_session_error)?;
+
+        match session.run_yaml(&source).await {
+            Ok(summary) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "script completed: {}/{} steps ran successfully",
+                summary.steps_run, summary.total_steps
+            ))])),
+            Err(e @ engine::EngineError::YamlStepFailed { .. }) => {
+                Ok(CallToolResult::error(vec![ContentBlock::text(e.to_string())]))
+            }
+            Err(e) => Err(map_engine_err(e)),
+        }
+    }
+
+    #[tool(
+        description = "Export a saved console/action trace's actions (navigate/click/type/press/assert) as a runnable YAML script -- 'record once, get a script'. Console/exception entries are not included."
+    )]
+    async fn browser_export_yaml(
+        &self,
+        Parameters(ExportYamlRequest { name }): Parameters<ExportYamlRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let yaml = engine::Session::export_yaml(&name).map_err(map_engine_err)?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(yaml)]))
+    }
+
     #[tool(description = "Capture a screenshot of the current page")]
     async fn browser_screenshot(&self) -> Result<CallToolResult, McpError> {
         self.ensure_session().await?;
@@ -748,6 +796,7 @@ impl ServerHandler for AibTools {
                  browser_set_clock(time_ms), browser_advance_clock(ms), \
                  browser_console_start(name), browser_console_stop(), \
                  browser_assert(text, present?), \
+                 browser_run_yaml(source), browser_export_yaml(name), \
                  browser_close(). Refs come from the snapshot text, e.g. `[e6]` -> ref \"e6\". \
                  Actions do not auto-return a new snapshot; call browser_snapshot again after an \
                  action that may have changed the page. Use browser_record_start/stop to capture a \
@@ -784,7 +833,12 @@ impl ServerHandler for AibTools {
                  browser_assert(text, present?) checks the current snapshot immediately (no polling, \
                  unlike browser_wait_for) and fails as a real tool-call failure you should treat as a \
                  test failure, not a protocol error -- present defaults to true (assert the text is \
-                 there); set it to false to assert the text is absent."
+                 there); set it to false to assert the text is absent. browser_run_yaml(source) runs a \
+                 YAML script's steps (navigate/click/type/press/wait_for/assert, one per line like \
+                 `- click: e6` or `- type: {ref: e6, text: \"...\"}`) against the current session, \
+                 stopping at the first failing step; browser_export_yaml(name) turns an already-saved \
+                 trace's actions back into a runnable script of that same format -- record a flow once \
+                 with browser_console_start/stop, then export and re-run it as a repeatable test."
                     .to_string(),
             )
     }
@@ -824,13 +878,15 @@ fn map_engine_err(e: engine::EngineError) -> McpError {
     use engine::EngineError::*;
     match e {
         StaleRef(_) | UnknownKey(_) | UnknownPersona(_) | UntrainedProfile(_) | AmbiguousPersona
-        | UnknownCassette(_) | Clock(_) => McpError::invalid_params(e.to_string(), None),
+        | UnknownCassette(_) | Clock(_) | YamlRunner(_) => McpError::invalid_params(e.to_string(), None),
         ActionTimeout { .. } | WaitTimeout { .. } | Cdp(_) | Serde(_) | Recording(_) | Training(_)
         | Network(_) | Console(_) => McpError::internal_error(e.to_string(), None),
-        // Normally handled directly in browser_assert as a CallToolResult::error
-        // (a tool-level failure, not a protocol error); this arm only fires if
-        // AssertionFailed ever reaches this generic path some other way.
+        // Normally handled directly in browser_assert/browser_run_yaml as a
+        // CallToolResult::error (a tool-level failure, not a protocol error);
+        // these arms only fire if that error ever reaches this generic path
+        // some other way.
         AssertionFailed { .. } => McpError::invalid_params(e.to_string(), None),
+        YamlStepFailed { .. } => McpError::invalid_params(e.to_string(), None),
     }
 }
 

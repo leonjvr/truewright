@@ -20,11 +20,12 @@ An LLM-first browser-testing engine: a single Rust binary that drives your insta
 - **Console capture — done.** `browser_console_start(name)`/`browser_console_stop()` capture the page's `console.log`/`warn`/`error` output and any uncaught exceptions between start and stop, saved as a named JSONL trace (`<data-dir>/aib/traces/<name>.jsonl`) — the fastest way to see why a test failed or an app behaved unexpectedly. Verified: a fixture logging at multiple levels and throwing produced a trace with matching entries in the same chronological order.
 - **Action trace — done.** While a console trace is active, `browser_navigate`/`browser_click`/`browser_type`/`browser_press` each append a one-line summary into that same trace, interleaved chronologically with console/exception entries — one JSONL stream showing both what the agent did and what the page said in response. Zero overhead when no trace is active. Verified: a navigate + type + click sequence produced action entries in the correct order relative to each other.
 - **Browser assert — done.** `browser_assert(text, present?)` checks the current snapshot immediately (no polling, unlike `browser_wait_for`) and fails as a genuine tool-level failure result (not a protocol error) an agent should treat as a test failure — the explicit pass/fail check a test actually needs, distinct from `browser_wait_for`'s "poll until true" shape. Logged into the active trace (pass or fail) when one is active. Verified: a passing check succeeds, a failing one returns a clear error, and both are correctly logged.
-- **Next:** true OS-level input mode (Phase 4) and the YAML runner (Phase 3's last piece) — see PROPOSAL.md's roadmap.
+- **YAML runner — done (Phase 3 complete).** `browser_run_yaml(source)` executes a declarative YAML script (`navigate`/`click`/`type`/`press`/`wait_for`/`assert` steps) against the current session, stopping at the first failing step; `browser_export_yaml(name)` converts an already-captured trace's actions back into a runnable script of that same format — record a flow once, then replay it as a checked-in test. Verified: a hand-written script runs end to end; a deliberately-failing script stops at the right step without running later ones; a real captured trace exports to YAML and replaying it reproduces the same end state.
+- **Next:** true OS-level input mode (Phase 4) — see PROPOSAL.md's roadmap.
 
 ## MCP server
 
-Configure `aib mcp` as a stdio MCP server in an agent host (e.g. Claude Code, Claude Desktop). It lazily launches a browser on the first tool call and exposes: `browser_navigate(url)`, `browser_snapshot()`, `browser_click(ref, human_like?, persona?, trained_profile?, seed?)`, `browser_type(ref, text, submit?, human_like?, persona?, trained_profile?, seed?)`, `browser_press(key)`, `browser_wait_for(text, timeout_ms?)`, `browser_screenshot()`, `browser_record_start(max_duration_ms?, quality?)`, `browser_record_stop()`, `browser_train_start(name)`, `browser_train_stop()`, `browser_network_record_start(name)`, `browser_network_record_stop()`, `browser_network_replay_start(name)`, `browser_network_replay_stop()`, `browser_add_init_script(source)`, `browser_seed_randomness(seed)`, `browser_set_clock(time_ms)`, `browser_advance_clock(ms)`, `browser_console_start(name)`, `browser_console_stop()`, `browser_assert(text, present?)`, `browser_close()`. Refs come from the snapshot text (e.g. `[e6]`).
+Configure `aib mcp` as a stdio MCP server in an agent host (e.g. Claude Code, Claude Desktop). It lazily launches a browser on the first tool call and exposes: `browser_navigate(url)`, `browser_snapshot()`, `browser_click(ref, human_like?, persona?, trained_profile?, seed?)`, `browser_type(ref, text, submit?, human_like?, persona?, trained_profile?, seed?)`, `browser_press(key)`, `browser_wait_for(text, timeout_ms?)`, `browser_screenshot()`, `browser_record_start(max_duration_ms?, quality?)`, `browser_record_stop()`, `browser_train_start(name)`, `browser_train_stop()`, `browser_network_record_start(name)`, `browser_network_record_stop()`, `browser_network_replay_start(name)`, `browser_network_replay_stop()`, `browser_add_init_script(source)`, `browser_seed_randomness(seed)`, `browser_set_clock(time_ms)`, `browser_advance_clock(ms)`, `browser_console_start(name)`, `browser_console_stop()`, `browser_assert(text, present?)`, `browser_run_yaml(source)`, `browser_export_yaml(name)`, `browser_close()`. Refs come from the snapshot text (e.g. `[e6]`).
 
 `human_like` (default `false`) switches `browser_click`/`browser_type` from instant dispatch to synthesized human-like motion: a curved, timed mouse path (`browser_click`) plus per-character typing pauses (`browser_type`). Setting `persona` or `trained_profile` implies `human_like` even if left at its default. `seed` fixes the RNG for reproducible motion/timing across calls; omit it for a fresh random seed each time. The result text always reports the seed used, e.g. `clicked e6 (human-like, seed=1234567890)`.
 
@@ -98,6 +99,31 @@ browser_assert(text: "Loading...", present: false)        # passes if the text i
 ```
 
 Unlike `browser_wait_for` (which polls until the text appears or a timeout elapses, returning the snapshot), `browser_assert` checks the current snapshot once, immediately, and is pass/fail: it returns a normal success result when the check holds, and an MCP tool-level error result — a genuine failure signal, not a protocol error — with a message identifying what was expected when it doesn't. Treat a `browser_assert` failure as a real test failure. `present` defaults to `true`.
+
+**YAML scripts:**
+
+```yaml
+name: signup flow
+steps:
+  - navigate: "https://example.com/signup"
+  - type:
+      ref: e2
+      text: "hello@example.com"
+  - click: e3
+  - assert:
+      text: "Account created"
+```
+
+```
+browser_run_yaml(source: "<the YAML above>")   # runs each step in order, stopping at the first failure
+
+browser_console_start(name: "signup-flow")     # record a flow once...
+...  browser_navigate/type/click as normal ...
+browser_console_stop()
+browser_export_yaml(name: "signup-flow")       # ...then get it back as a runnable script
+```
+
+Steps are single-key maps, matching common step-list conventions (GitHub Actions, Ansible): `navigate`, `click`, and `press` take a plain string; `type` takes `{ref, text, submit?}`; `wait_for` takes `{text, timeout_ms?}`; `assert` takes `{text, present?}`. `browser_run_yaml` executes them via the exact same underlying methods a live tool call would use and stops at the first failing step, reporting which one. `browser_export_yaml` reads an already-saved trace's `action` entries (from `browser_console_start`/`stop`) and reconstructs the equivalent script — console/exception entries aren't included, since there's no "step" to replay for a log message. v1 covers the instant-dispatch action set only (no `human_like`/persona/trained-profile steps).
 
 ```
 aib mcp                        # headless, managed chrome-headless-shell (auto-downloaded/cached)
