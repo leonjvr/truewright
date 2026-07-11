@@ -115,6 +115,21 @@ pub struct WaitForRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct AssertRequest {
+    #[schemars(description = "Substring to check for in the current page snapshot")]
+    pub text: String,
+    #[serde(default = "default_true")]
+    #[schemars(
+        description = "true (default): assert the text is present. false: assert it is absent."
+    )]
+    pub present: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RecordStartRequest {
     #[serde(default)]
     #[schemars(
@@ -423,6 +438,35 @@ impl AibTools {
         Ok(CallToolResult::success(vec![ContentBlock::text(snapshot)]))
     }
 
+    #[tool(
+        description = "Immediately assert whether a substring is present (or absent) in the current page snapshot -- no polling, unlike browser_wait_for. Fails as a tool-level error result (not a protocol error) if the assertion doesn't hold."
+    )]
+    async fn browser_assert(
+        &self,
+        Parameters(AssertRequest { text, present }): Parameters<AssertRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_session().await?;
+        let guard = self.session.lock().await;
+        let session = guard.as_ref().ok_or_else(no_session_error)?;
+
+        match session.assert_text(&text, present).await {
+            Ok(()) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "assertion passed: text {text:?} is {}present",
+                if present { "" } else { "not " }
+            ))])),
+            Err(engine::EngineError::AssertionFailed {
+                text,
+                present,
+                snapshot_excerpt,
+            }) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "assertion failed: expected text {text:?} to be {}present, but it was {}.\ncurrent snapshot (truncated):\n{snapshot_excerpt}",
+                if present { "" } else { "not " },
+                if present { "not found" } else { "found" }
+            ))])),
+            Err(e) => Err(map_engine_err(e)),
+        }
+    }
+
     #[tool(description = "Capture a screenshot of the current page")]
     async fn browser_screenshot(&self) -> Result<CallToolResult, McpError> {
         self.ensure_session().await?;
@@ -703,6 +747,7 @@ impl ServerHandler for AibTools {
                  browser_add_init_script(source), browser_seed_randomness(seed), \
                  browser_set_clock(time_ms), browser_advance_clock(ms), \
                  browser_console_start(name), browser_console_stop(), \
+                 browser_assert(text, present?), \
                  browser_close(). Refs come from the snapshot text, e.g. `[e6]` -> ref \"e6\". \
                  Actions do not auto-return a new snapshot; call browser_snapshot again after an \
                  action that may have changed the page. Use browser_record_start/stop to capture a \
@@ -734,7 +779,12 @@ impl ServerHandler for AibTools {
                  handler fire instantly and deterministically instead of waiting for real time or \
                  skipping the behavior. Use browser_console_start(name)/stop to capture the page's \
                  console.log/warn/error output and any uncaught exceptions to a named JSONL trace -- \
-                 useful for finding out why a test failed or an app behaved unexpectedly."
+                 useful for finding out why a test failed or an app behaved unexpectedly (actions \
+                 taken while a trace is active are logged into the same trace too). \
+                 browser_assert(text, present?) checks the current snapshot immediately (no polling, \
+                 unlike browser_wait_for) and fails as a real tool-call failure you should treat as a \
+                 test failure, not a protocol error -- present defaults to true (assert the text is \
+                 there); set it to false to assert the text is absent."
                     .to_string(),
             )
     }
@@ -777,6 +827,10 @@ fn map_engine_err(e: engine::EngineError) -> McpError {
         | UnknownCassette(_) | Clock(_) => McpError::invalid_params(e.to_string(), None),
         ActionTimeout { .. } | WaitTimeout { .. } | Cdp(_) | Serde(_) | Recording(_) | Training(_)
         | Network(_) | Console(_) => McpError::internal_error(e.to_string(), None),
+        // Normally handled directly in browser_assert as a CallToolResult::error
+        // (a tool-level failure, not a protocol error); this arm only fires if
+        // AssertionFailed ever reaches this generic path some other way.
+        AssertionFailed { .. } => McpError::invalid_params(e.to_string(), None),
     }
 }
 

@@ -55,6 +55,13 @@ pub enum EngineError {
 
     #[error("console capture failed: {0}")]
     Console(String),
+
+    #[error("assertion failed: text={text:?} expected_present={present}")]
+    AssertionFailed {
+        text: String,
+        present: bool,
+        snapshot_excerpt: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;

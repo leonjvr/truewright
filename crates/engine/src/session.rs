@@ -413,6 +413,30 @@ impl Session {
         }
     }
 
+    /// Checks the current snapshot for `text`'s presence (or absence),
+    /// immediately -- no polling, unlike `wait_for` (browser-assert spec:
+    /// "Immediate text-presence assertion"). Logs the outcome (pass or
+    /// fail) into the active trace, if any.
+    pub async fn assert_text(&self, text: &str, present: bool) -> Result<()> {
+        let snap = self.snapshot().await?;
+        let holds = snap.contains(text) == present;
+
+        self.log_action(format!(
+            "assert text={text:?} present={present} => {}",
+            if holds { "pass" } else { "fail" }
+        ))
+        .await;
+
+        if holds {
+            return Ok(());
+        }
+        Err(EngineError::AssertionFailed {
+            text: text.to_string(),
+            present,
+            snapshot_excerpt: snap.chars().take(500).collect(),
+        })
+    }
+
     pub async fn screenshot(&self) -> Result<Vec<u8>> {
         Ok(self.page.screenshot().await?)
     }
