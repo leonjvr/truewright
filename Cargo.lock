@@ -195,6 +195,7 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "ureq",
+ "windows",
  "winreg",
  "zip",
 ]

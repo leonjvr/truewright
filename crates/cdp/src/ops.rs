@@ -156,6 +156,17 @@ impl Page {
         Ok(resp.identifier)
     }
 
+    /// The on-screen bounds of this page's native window (true-user-input
+    /// spec: window discovery). A browser-level command (needs `targetId`
+    /// explicitly since there's no page-session-implicit target for it).
+    pub async fn window_bounds(&self) -> Result<browser::GetWindowForTargetResponse> {
+        self.browser_session
+            .execute::<browser::GetWindowForTarget>(browser::GetWindowForTargetParams {
+                target_id: self.target_id.clone(),
+            })
+            .await
+    }
+
     pub async fn evaluate(&self, expression: &str) -> Result<serde_json::Value> {
         let resp = self
             .session

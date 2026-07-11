@@ -73,6 +73,12 @@ pub enum EngineError {
         step_kind: String,
         message: String,
     },
+
+    #[error("true_input requires a headed session on Windows: {0}")]
+    TrueInputUnsupported(String),
+
+    #[error("real OS input dispatch failed: {0}")]
+    TrueInput(String),
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;

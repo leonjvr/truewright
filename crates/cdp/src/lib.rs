@@ -6,6 +6,8 @@ pub mod download;
 pub mod error;
 pub mod launch;
 pub mod ops;
+#[cfg(windows)]
+pub mod os_input;
 pub mod protocol;
 pub mod session;
 pub mod transport;

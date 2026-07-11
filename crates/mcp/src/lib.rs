@@ -68,6 +68,11 @@ pub struct RefRequest {
     #[serde(default)]
     #[schemars(description = "Fixed seed for reproducible human_like motion (default: random)")]
     pub seed: Option<u64>,
+    #[serde(default)]
+    #[schemars(
+        description = "Dispatch via real Windows OS-level input (SendInput) instead of CDP -- moves the actual system cursor and clicks for real, not just inside the browser tab. Windows-only, headed sessions only (default false)."
+    )]
+    pub true_input: bool,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -97,6 +102,11 @@ pub struct TypeRequest {
     #[serde(default)]
     #[schemars(description = "Fixed seed for reproducible human_like motion (default: random)")]
     pub seed: Option<u64>,
+    #[serde(default)]
+    #[schemars(
+        description = "Dispatch via real Windows OS-level input (SendInput) instead of CDP -- moves the actual system cursor and types for real, not just inside the browser tab. Windows-only, headed sessions only (default false)."
+    )]
+    pub true_input: bool,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -253,7 +263,10 @@ impl AibTools {
         self.ensure_session().await?;
         let guard = self.session.lock().await;
         let session = guard.as_ref().ok_or_else(no_session_error)?;
-        session.seed_randomness(seed).await.map_err(map_engine_err)?;
+        session
+            .seed_randomness(seed)
+            .await
+            .map_err(map_engine_err)?;
         Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "Math.random seeded with {seed}; call browser_navigate for it to take effect."
         ))]))
@@ -325,12 +338,10 @@ impl AibTools {
 
     #[tool(description = "Stop the active console capture and save the JSONL trace")]
     async fn browser_console_stop(&self) -> Result<CallToolResult, McpError> {
-        let capture = self
-            .console_capture
-            .lock()
-            .await
-            .take()
-            .ok_or_else(|| McpError::invalid_params("no console capture is in progress", None))?;
+        let capture =
+            self.console_capture.lock().await.take().ok_or_else(|| {
+                McpError::invalid_params("no console capture is in progress", None)
+            })?;
 
         let summary = capture.stop().await.map_err(map_engine_err)?;
 
@@ -365,7 +376,7 @@ impl AibTools {
     }
 
     #[tool(
-        description = "Click an element by its ref from the last snapshot. Set human_like to move the mouse along a curved path first, like a real user."
+        description = "Click an element by its ref from the last snapshot. Set human_like to move the mouse along a curved path first, like a real user. Set true_input to dispatch via real Windows OS-level input instead of CDP (moves the actual system cursor)."
     )]
     async fn browser_click(
         &self,
@@ -375,6 +386,7 @@ impl AibTools {
             persona,
             trained_profile,
             seed,
+            true_input,
         }): Parameters<RefRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.ensure_session().await?;
@@ -382,7 +394,7 @@ impl AibTools {
         let session = guard.as_ref().ok_or_else(no_session_error)?;
         let human = build_human_like(human_like, persona, trained_profile, seed)?;
         let used_seed = session
-            .click_with(&r#ref, human)
+            .click_with(&r#ref, human, true_input)
             .await
             .map_err(map_engine_err)?;
         Ok(CallToolResult::success(vec![ContentBlock::text(format!(
@@ -392,7 +404,7 @@ impl AibTools {
     }
 
     #[tool(
-        description = "Click an element by ref, then type text into it (optionally submit with Enter). Set human_like to move to it and type character-by-character with human-like pauses."
+        description = "Click an element by ref, then type text into it (optionally submit with Enter). Set human_like to move to it and type character-by-character with human-like pauses. Set true_input to dispatch via real Windows OS-level input instead of CDP (moves the actual system cursor and takes real keyboard focus)."
     )]
     async fn browser_type(
         &self,
@@ -404,6 +416,7 @@ impl AibTools {
             persona,
             trained_profile,
             seed,
+            true_input,
         }): Parameters<TypeRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.ensure_session().await?;
@@ -411,7 +424,7 @@ impl AibTools {
         let session = guard.as_ref().ok_or_else(no_session_error)?;
         let human = build_human_like(human_like, persona, trained_profile, seed)?;
         let used_seed = session
-            .type_text_with(&r#ref, &text, submit, human)
+            .type_text_with(&r#ref, &text, submit, human, true_input)
             .await
             .map_err(map_engine_err)?;
         Ok(CallToolResult::success(vec![ContentBlock::text(format!(
@@ -498,7 +511,9 @@ impl AibTools {
                 summary.steps_run, summary.total_steps
             ))])),
             Err(e @ engine::EngineError::YamlStepFailed { .. }) => {
-                Ok(CallToolResult::error(vec![ContentBlock::text(e.to_string())]))
+                Ok(CallToolResult::error(vec![ContentBlock::text(
+                    e.to_string(),
+                )]))
             }
             Err(e) => Err(map_engine_err(e)),
         }
@@ -635,12 +650,10 @@ impl AibTools {
         description = "Stop the active training session and fit/save a persona from what was captured. Fails if too little was captured to fit."
     )]
     async fn browser_train_stop(&self) -> Result<CallToolResult, McpError> {
-        let training = self
-            .training
-            .lock()
-            .await
-            .take()
-            .ok_or_else(|| McpError::invalid_params("no training session is in progress", None))?;
+        let training =
+            self.training.lock().await.take().ok_or_else(|| {
+                McpError::invalid_params("no training session is in progress", None)
+            })?;
 
         let stored = training.stop().await.map_err(map_engine_err)?;
 
@@ -691,12 +704,10 @@ impl AibTools {
 
     #[tool(description = "Stop the active network recording and save the cassette")]
     async fn browser_network_record_stop(&self) -> Result<CallToolResult, McpError> {
-        let network_recording = self
-            .network_recording
-            .lock()
-            .await
-            .take()
-            .ok_or_else(|| McpError::invalid_params("no network recording is in progress", None))?;
+        let network_recording =
+            self.network_recording.lock().await.take().ok_or_else(|| {
+                McpError::invalid_params("no network recording is in progress", None)
+            })?;
 
         let summary = network_recording.stop().await.map_err(map_engine_err)?;
 
@@ -748,12 +759,10 @@ impl AibTools {
 
     #[tool(description = "Stop network replay and return to normal (live) network behavior")]
     async fn browser_network_replay_stop(&self) -> Result<CallToolResult, McpError> {
-        let network_replay = self
-            .network_replay
-            .lock()
-            .await
-            .take()
-            .ok_or_else(|| McpError::invalid_params("no network replay is in progress", None))?;
+        let network_replay =
+            self.network_replay.lock().await.take().ok_or_else(|| {
+                McpError::invalid_params("no network replay is in progress", None)
+            })?;
 
         network_replay.stop().await.map_err(map_engine_err)?;
 
@@ -862,8 +871,9 @@ fn build_human_like(
     if !human_like && persona.is_none() && trained_profile.is_none() {
         return Ok(None);
     }
-    let persona = engine::Session::persona_or_trained(persona.as_deref(), trained_profile.as_deref())
-        .map_err(map_engine_err)?;
+    let persona =
+        engine::Session::persona_or_trained(persona.as_deref(), trained_profile.as_deref())
+            .map_err(map_engine_err)?;
     Ok(Some(engine::HumanLike { persona, seed }))
 }
 
@@ -877,10 +887,24 @@ fn seed_suffix(seed: Option<u64>) -> String {
 fn map_engine_err(e: engine::EngineError) -> McpError {
     use engine::EngineError::*;
     match e {
-        StaleRef(_) | UnknownKey(_) | UnknownPersona(_) | UntrainedProfile(_) | AmbiguousPersona
-        | UnknownCassette(_) | Clock(_) | YamlRunner(_) => McpError::invalid_params(e.to_string(), None),
-        ActionTimeout { .. } | WaitTimeout { .. } | Cdp(_) | Serde(_) | Recording(_) | Training(_)
-        | Network(_) | Console(_) => McpError::internal_error(e.to_string(), None),
+        StaleRef(_)
+        | UnknownKey(_)
+        | UnknownPersona(_)
+        | UntrainedProfile(_)
+        | AmbiguousPersona
+        | UnknownCassette(_)
+        | Clock(_)
+        | YamlRunner(_)
+        | TrueInputUnsupported(_) => McpError::invalid_params(e.to_string(), None),
+        ActionTimeout { .. }
+        | WaitTimeout { .. }
+        | Cdp(_)
+        | Serde(_)
+        | Recording(_)
+        | Training(_)
+        | Network(_)
+        | Console(_)
+        | TrueInput(_) => McpError::internal_error(e.to_string(), None),
         // Normally handled directly in browser_assert/browser_run_yaml as a
         // CallToolResult::error (a tool-level failure, not a protocol error);
         // these arms only fire if that error ever reaches this generic path

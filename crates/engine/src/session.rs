@@ -12,6 +12,12 @@ use tokio::sync::Mutex;
 const RESOLVE_JS: &str = include_str!("../assets/resolve.js");
 const SEEDED_RANDOM_JS: &str = include_str!("../assets/seeded_random.js");
 const VIRTUAL_CLOCK_JS: &str = include_str!("../assets/virtual_clock.js");
+/// Reads this page's own on-screen window geometry (true-user-input spec:
+/// "Viewport-to-screen coordinate translation" -- Chrome composites its own
+/// toolbar/tab UI into one native window, so this can't be read from native
+/// win32 APIs alone; the page itself already knows where it sits).
+#[cfg(windows)]
+const WINDOW_GEOMETRY_JS: &str = "({screen_x: window.screenX, screen_y: window.screenY, outer_width: window.outerWidth, outer_height: window.outerHeight, inner_width: window.innerWidth, inner_height: window.innerHeight, device_pixel_ratio: window.devicePixelRatio})";
 
 const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_ACTION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -43,6 +49,13 @@ pub struct Session {
     /// before appending a summary entry -- a no-op when no trace is
     /// active.
     action_trace_sink: crate::console::ActionTraceSink,
+    /// Whether this session was launched headless -- `true_input` rejects
+    /// cleanly rather than silently falling back to CDP dispatch, since a
+    /// headless renderer has no real OS window to receive `SendInput`
+    /// events (true-user-input spec: "Headless and non-Windows rejection").
+    /// Only read by `true_input_pid`, which is Windows-only.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    headless: bool,
 }
 
 /// Requests a human-like (curved mouse path / paced typing cadence) variant
@@ -109,6 +122,7 @@ impl Session {
             mouse_pos: Mutex::new((0.0, 0.0)),
             training_active: Arc::new(AtomicBool::new(false)),
             action_trace_sink: Arc::new(Mutex::new(None)),
+            headless,
         })
     }
 
@@ -131,7 +145,10 @@ impl Session {
     // EngineError is kept as one flat enum (matches cdp::CdpError's
     // rationale); see the identical allow in cdp/src/launch.rs.
     #[allow(clippy::result_large_err)]
-    pub fn persona_or_trained(persona: Option<&str>, trained_profile: Option<&str>) -> Result<Persona> {
+    pub fn persona_or_trained(
+        persona: Option<&str>,
+        trained_profile: Option<&str>,
+    ) -> Result<Persona> {
         match (persona, trained_profile) {
             (Some(_), Some(_)) => Err(EngineError::AmbiguousPersona),
             (Some(name), None) => Self::persona(name),
@@ -158,7 +175,10 @@ impl Session {
     /// Starts passively recording network traffic to a named cassette
     /// (network-mocking spec: "Passive network recording to a named
     /// cassette"). `NetworkRecording::stop` finishes and persists it.
-    pub async fn network_record_start(&self, name: &str) -> Result<crate::network::NetworkRecording> {
+    pub async fn network_record_start(
+        &self,
+        name: &str,
+    ) -> Result<crate::network::NetworkRecording> {
         crate::network::NetworkRecording::start(&self.page, name).await
     }
 
@@ -217,8 +237,12 @@ impl Session {
     /// Starts capturing console output and uncaught exceptions on the
     /// current page (console-capture spec). `ConsoleCapture::stop` finishes
     /// and persists the JSONL trace under `name`.
-    pub async fn console_capture_start(&self, name: &str) -> Result<crate::console::ConsoleCapture> {
-        crate::console::ConsoleCapture::start(&self.page, name, self.action_trace_sink.clone()).await
+    pub async fn console_capture_start(
+        &self,
+        name: &str,
+    ) -> Result<crate::console::ConsoleCapture> {
+        crate::console::ConsoleCapture::start(&self.page, name, self.action_trace_sink.clone())
+            .await
     }
 
     /// Appends a one-line summary to the active trace, if any (action-trace
@@ -248,7 +272,7 @@ impl Session {
     }
 
     pub async fn click(&self, r#ref: &str) -> Result<()> {
-        self.click_with(r#ref, None).await?;
+        self.click_with(r#ref, None, false).await?;
         Ok(())
     }
 
@@ -257,11 +281,18 @@ impl Session {
     /// position) before pressing, instead of teleporting straight to the
     /// target (human-motion spec: "Curved, timed mouse movement to a
     /// target"). Returns the seed used, if human-like mode was requested, so
-    /// the run can be reproduced.
-    pub async fn click_with(&self, r#ref: &str, human: Option<HumanLike>) -> Result<Option<u64>> {
+    /// the run can be reproduced. `true_input` dispatches via real Windows
+    /// `SendInput` instead of CDP (true-user-input spec); rejected cleanly
+    /// for headless sessions or on non-Windows platforms.
+    pub async fn click_with(
+        &self,
+        r#ref: &str,
+        human: Option<HumanLike>,
+        true_input: bool,
+    ) -> Result<Option<u64>> {
         self.log_action(format!("click {ref}")).await;
         let suppress = self.begin_training_suppression().await;
-        let result = self.click_dispatch(r#ref, human).await;
+        let result = self.click_dispatch(r#ref, human, true_input).await;
         self.end_training_suppression(suppress).await;
         result
     }
@@ -269,7 +300,8 @@ impl Session {
     /// Clicks to focus, then inserts text (browser-actions spec: "Type by
     /// ref"). `submit` additionally presses Enter afterward.
     pub async fn type_text(&self, r#ref: &str, text: &str, submit: bool) -> Result<()> {
-        self.type_text_with(r#ref, text, submit, None).await?;
+        self.type_text_with(r#ref, text, submit, None, false)
+            .await?;
         Ok(())
     }
 
@@ -277,13 +309,16 @@ impl Session {
     /// via a human-like mouse path, then dispatches one `char` event per
     /// character with a persona-derived, non-uniform delay between them
     /// (human-motion spec: "Per-character typing cadence"). Returns the
-    /// seed used, if human-like mode was requested.
+    /// seed used, if human-like mode was requested. `true_input` dispatches
+    /// via real Windows `SendInput` instead of CDP (true-user-input spec);
+    /// rejected cleanly for headless sessions or on non-Windows platforms.
     pub async fn type_text_with(
         &self,
         r#ref: &str,
         text: &str,
         submit: bool,
         human: Option<HumanLike>,
+        true_input: bool,
     ) -> Result<Option<u64>> {
         self.log_action(format!("type {ref} {text:?}")).await;
         // Suppressed once for the whole action (focus-click + typing +
@@ -291,7 +326,9 @@ impl Session {
         // unwrapped `_dispatch` variants so the suppress flag isn't
         // cleared partway through by a nested toggle.
         let suppress = self.begin_training_suppression().await;
-        let result = self.type_text_dispatch(r#ref, text, submit, human).await;
+        let result = self
+            .type_text_dispatch(r#ref, text, submit, human, true_input)
+            .await;
         self.end_training_suppression(suppress).await;
         result
     }
@@ -299,22 +336,32 @@ impl Session {
     pub async fn press(&self, key: &str) -> Result<()> {
         self.log_action(format!("press {key}")).await;
         let suppress = self.begin_training_suppression().await;
-        let result = self.press_dispatch(key).await;
+        let result = self.press_dispatch(key, false).await;
         self.end_training_suppression(suppress).await;
         result
     }
 
-    async fn click_dispatch(&self, r#ref: &str, human: Option<HumanLike>) -> Result<Option<u64>> {
+    async fn click_dispatch(
+        &self,
+        r#ref: &str,
+        human: Option<HumanLike>,
+        true_input: bool,
+    ) -> Result<Option<u64>> {
         let coords = self
             .resolve_actionable(r#ref, DEFAULT_ACTION_TIMEOUT)
             .await?;
+
+        if true_input {
+            return self.click_true_input(coords, human).await;
+        }
 
         let seed = if let Some(HumanLike { persona, seed }) = human {
             let seed = seed.unwrap_or_else(rand_seed);
             let mut rng = motion::seeded_rng(seed);
             let from = *self.mouse_pos.lock().await;
             let target_size = coords.width.max(coords.height).max(1.0);
-            let path = motion::mouse_path(from, (coords.x, coords.y), target_size, &persona, &mut rng);
+            let path =
+                motion::mouse_path(from, (coords.x, coords.y), target_size, &persona, &mut rng);
             self.walk_mouse_path(&path).await?;
             Some(seed)
         } else {
@@ -332,6 +379,7 @@ impl Session {
         text: &str,
         submit: bool,
         human: Option<HumanLike>,
+        true_input: bool,
     ) -> Result<Option<u64>> {
         let seed = match human {
             Some(HumanLike { persona, seed }) => {
@@ -342,29 +390,50 @@ impl Session {
                         persona,
                         seed: Some(seed),
                     }),
+                    true_input,
                 )
                 .await?;
 
                 let mut rng = motion::seeded_rng(seed);
                 let timeline = motion::typing_timeline(text, &persona, &mut rng);
-                self.dispatch_typing(&timeline).await?;
+                if true_input {
+                    self.dispatch_typing_true_input(&timeline).await?;
+                } else {
+                    self.dispatch_typing(&timeline).await?;
+                }
                 Some(seed)
             }
             None => {
-                self.click_dispatch(r#ref, None).await?;
-                self.page.insert_text(text).await?;
+                self.click_dispatch(r#ref, None, true_input).await?;
+                if true_input {
+                    // SendInput has no bulk-insert primitive -- every
+                    // character is its own real keystroke either way, so
+                    // true_input without an explicit persona falls back to
+                    // a fast synthetic cadence rather than an unrealistic
+                    // zero-delay burst (true-user-input spec).
+                    let mut rng = motion::seeded_rng(rand_seed());
+                    let timeline = motion::typing_timeline(text, &Persona::fast(), &mut rng);
+                    self.dispatch_typing_true_input(&timeline).await?;
+                } else {
+                    self.page.insert_text(text).await?;
+                }
                 None
             }
         };
 
         if submit {
-            self.press_dispatch("Enter").await?;
+            self.press_dispatch("Enter", true_input).await?;
         }
         Ok(seed)
     }
 
-    async fn press_dispatch(&self, key: &str) -> Result<()> {
+    async fn press_dispatch(&self, key: &str, true_input: bool) -> Result<()> {
         let spec = keys::lookup(key).ok_or_else(|| EngineError::UnknownKey(key.to_string()))?;
+        if true_input {
+            return self
+                .press_true_input(spec.windows_virtual_key_code as u16)
+                .await;
+        }
         self.page
             .dispatch_key(spec.key, spec.code, spec.windows_virtual_key_code)
             .await?;
@@ -380,7 +449,10 @@ impl Session {
     async fn begin_training_suppression(&self) -> bool {
         let suppress = self.training_active.load(Ordering::SeqCst);
         if suppress {
-            let _ = self.page.evaluate("window.__aibSuppressTraining = true").await;
+            let _ = self
+                .page
+                .evaluate("window.__aibSuppressTraining = true")
+                .await;
         }
         suppress
     }
@@ -509,6 +581,193 @@ impl Session {
             last_ms = key.at_ms;
         }
         Ok(())
+    }
+
+    /// Resolves `true_input`'s preconditions (true-user-input spec:
+    /// "Headless and non-Windows rejection") into the OS process id real
+    /// dispatch needs to locate the browser's window. A clean typed error,
+    /// never a silent CDP fallback.
+    // EngineError is kept as one flat enum (matches cdp::CdpError's
+    // rationale); see the identical allow in cdp/src/launch.rs.
+    #[cfg(windows)]
+    #[allow(clippy::result_large_err)]
+    fn true_input_pid(&self) -> Result<u32> {
+        if self.headless {
+            return Err(EngineError::TrueInputUnsupported(
+                "session is headless; true_input requires a real, visible window".to_string(),
+            ));
+        }
+        self.launched.as_ref().and_then(|l| l.pid()).ok_or_else(|| {
+            EngineError::TrueInputUnsupported(
+                "no OS process id available for this session".to_string(),
+            )
+        })
+    }
+
+    /// Reads this page's own on-screen geometry, for translating viewport
+    /// coordinates to OS screen coordinates (true-user-input spec:
+    /// "Viewport-to-screen coordinate translation").
+    #[cfg(windows)]
+    async fn window_geometry(&self) -> Result<cdp::os_input::WindowGeometry> {
+        #[derive(Deserialize)]
+        struct Geom {
+            screen_x: f64,
+            screen_y: f64,
+            outer_width: f64,
+            outer_height: f64,
+            inner_width: f64,
+            inner_height: f64,
+            device_pixel_ratio: f64,
+        }
+        let raw = self.page.evaluate(WINDOW_GEOMETRY_JS).await?;
+        let g: Geom = serde_json::from_value(raw)?;
+        Ok(cdp::os_input::WindowGeometry {
+            screen_x: g.screen_x,
+            screen_y: g.screen_y,
+            outer_width: g.outer_width,
+            outer_height: g.outer_height,
+            inner_width: g.inner_width,
+            inner_height: g.inner_height,
+            device_pixel_ratio: g.device_pixel_ratio,
+        })
+    }
+
+    /// Reads this page's on-screen window bounds from CDP, for
+    /// disambiguating between a browser process's several OS windows.
+    /// Every headed session turns out to own at least two: the window
+    /// opened by the initial browser launch, plus a separate native window
+    /// for the isolated `BrowserContext` the engine actually drives (see
+    /// design.md addendum) -- PID filtering alone can't tell them apart, so
+    /// `os_input::find_browser_window` picks whichever candidate's bounds
+    /// most closely match this hint.
+    #[cfg(windows)]
+    async fn window_hint(&self) -> Result<cdp::os_input::WindowHint> {
+        let bounds = self.page.window_bounds().await?.bounds;
+        let (Some(left), Some(top), Some(width), Some(height)) =
+            (bounds.left, bounds.top, bounds.width, bounds.height)
+        else {
+            return Err(EngineError::TrueInput(
+                "browser reported incomplete window bounds (window minimized?)".to_string(),
+            ));
+        };
+        Ok(cdp::os_input::WindowHint {
+            left: left as i32,
+            top: top as i32,
+            width: width as i32,
+            height: height as i32,
+        })
+    }
+
+    /// Runs a blocking `os_input` call on a dedicated thread so the
+    /// non-`Send` `HWND` it works with never needs to cross an `.await`
+    /// point (design.md: "all Win32 calls are fast, local, and
+    /// non-blocking" -- `spawn_blocking` here is about `Send`-safety, not
+    /// avoiding runtime stalls).
+    #[cfg(windows)]
+    async fn run_true_input<F>(&self, f: F) -> Result<()>
+    where
+        F: FnOnce() -> cdp::Result<()> + Send + 'static,
+    {
+        tokio::task::spawn_blocking(f)
+            .await
+            .map_err(|e| EngineError::TrueInput(format!("blocking task panicked: {e}")))?
+            .map_err(|e| EngineError::TrueInput(e.to_string()))
+    }
+
+    #[cfg(windows)]
+    #[allow(clippy::result_large_err)]
+    async fn click_true_input(
+        &self,
+        coords: Coordinates,
+        human: Option<HumanLike>,
+    ) -> Result<Option<u64>> {
+        let pid = self.true_input_pid()?;
+        let geom = self.window_geometry().await?;
+        let hint = self.window_hint().await?;
+
+        let seed = match human {
+            Some(HumanLike { persona, seed }) => {
+                let seed = seed.unwrap_or_else(rand_seed);
+                let mut rng = motion::seeded_rng(seed);
+                let from = *self.mouse_pos.lock().await;
+                let target_size = coords.width.max(coords.height).max(1.0);
+                let path =
+                    motion::mouse_path(from, (coords.x, coords.y), target_size, &persona, &mut rng);
+                let screen_path: Vec<cdp::os_input::ScreenPoint> = path
+                    .iter()
+                    .map(|p| {
+                        let (x, y) = cdp::os_input::viewport_to_screen(geom, p.x, p.y);
+                        cdp::os_input::ScreenPoint {
+                            at_ms: p.at_ms,
+                            x,
+                            y,
+                        }
+                    })
+                    .collect();
+                self.run_true_input(move || cdp::os_input::walk_and_click(pid, hint, &screen_path))
+                    .await?;
+                Some(seed)
+            }
+            None => {
+                let (x, y) = cdp::os_input::viewport_to_screen(geom, coords.x, coords.y);
+                self.run_true_input(move || cdp::os_input::click_at(pid, hint, x, y))
+                    .await?;
+                None
+            }
+        };
+
+        *self.mouse_pos.lock().await = (coords.x, coords.y);
+        Ok(seed)
+    }
+
+    #[cfg(not(windows))]
+    async fn click_true_input(
+        &self,
+        _coords: Coordinates,
+        _human: Option<HumanLike>,
+    ) -> Result<Option<u64>> {
+        Err(EngineError::TrueInputUnsupported(
+            "true_input is only supported on Windows".to_string(),
+        ))
+    }
+
+    #[cfg(windows)]
+    #[allow(clippy::result_large_err)]
+    async fn dispatch_typing_true_input(&self, timeline: &[motion::TimedKey]) -> Result<()> {
+        let pid = self.true_input_pid()?;
+        let hint = self.window_hint().await?;
+        let timed: Vec<cdp::os_input::TimedChar> = timeline
+            .iter()
+            .map(|k| cdp::os_input::TimedChar {
+                at_ms: k.at_ms,
+                ch: k.ch,
+            })
+            .collect();
+        self.run_true_input(move || cdp::os_input::dispatch_typing(pid, hint, &timed))
+            .await
+    }
+
+    #[cfg(not(windows))]
+    async fn dispatch_typing_true_input(&self, _timeline: &[motion::TimedKey]) -> Result<()> {
+        Err(EngineError::TrueInputUnsupported(
+            "true_input is only supported on Windows".to_string(),
+        ))
+    }
+
+    #[cfg(windows)]
+    #[allow(clippy::result_large_err)]
+    async fn press_true_input(&self, virtual_key_code: u16) -> Result<()> {
+        let pid = self.true_input_pid()?;
+        let hint = self.window_hint().await?;
+        self.run_true_input(move || cdp::os_input::press_key(pid, hint, virtual_key_code))
+            .await
+    }
+
+    #[cfg(not(windows))]
+    async fn press_true_input(&self, _virtual_key_code: u16) -> Result<()> {
+        Err(EngineError::TrueInputUnsupported(
+            "true_input is only supported on Windows".to_string(),
+        ))
     }
 
     async fn resolve_ref(&self, r#ref: &str) -> Result<ResolveResult> {
