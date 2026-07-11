@@ -31,7 +31,7 @@
 - [x] 5.5 Corrected three real CDP wiring assumptions that live testing disproved (see design.md addendum): `setAutoAttach` replaced with `setDiscoverTargets`; `list_pages` made self-healing against a transient Chrome-internal target; active-page fallback shared between the event-driven and self-heal paths
 
 ## 6. Wrap-up
-- [ ] 6.1 Update README with `browser_list_pages`/`browser_switch_page` usage
-- [ ] 6.2 Update PROPOSAL.md's Phase 5 row
-- [ ] 6.3 `openspec archive popup-auto-attach -y`, fix any "Purpose: TBD" placeholder in the synced spec
-- [ ] 6.4 Three commits: Propose, Implement, Sync-specs-and-archive
+- [x] 6.1 Update README with `browser_list_pages`/`browser_switch_page` usage
+- [x] 6.2 Update PROPOSAL.md's Phase 5 row
+- [x] 6.3 `openspec archive popup-auto-attach -y`, fix any "Purpose: TBD" placeholder in the synced spec
+- [x] 6.4 Three commits: Propose, Implement, Sync-specs-and-archive
