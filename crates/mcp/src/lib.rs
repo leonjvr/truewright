@@ -31,6 +31,22 @@ pub struct SeedRandomnessRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SetClockRequest {
+    #[schemars(
+        description = "Epoch milliseconds to freeze the virtual clock at. Register before browser_navigate -- it only affects loads that happen after registration. Time only moves via browser_advance_clock."
+    )]
+    pub time_ms: u64,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct AdvanceClockRequest {
+    #[schemars(
+        description = "Milliseconds to advance the installed virtual clock by. Fires every due setTimeout/setInterval/requestAnimationFrame callback in chronological order, including callbacks newly scheduled within the same advance. Requires browser_set_clock to have been called (and browser_navigate since)."
+    )]
+    pub ms: u64,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RefRequest {
     #[schemars(description = "Element ref from a snapshot, e.g. \"e6\"")]
     pub r#ref: String,
@@ -203,6 +219,38 @@ impl AibTools {
         session.seed_randomness(seed).await.map_err(map_engine_err)?;
         Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "Math.random seeded with {seed}; call browser_navigate for it to take effect."
+        ))]))
+    }
+
+    #[tool(
+        description = "Install a virtual clock frozen at the given epoch time. Time only moves via browser_advance_clock. Call before browser_navigate for it to take effect."
+    )]
+    async fn browser_set_clock(
+        &self,
+        Parameters(SetClockRequest { time_ms }): Parameters<SetClockRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_session().await?;
+        let guard = self.session.lock().await;
+        let session = guard.as_ref().ok_or_else(no_session_error)?;
+        session.set_clock(time_ms).await.map_err(map_engine_err)?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "virtual clock set to {time_ms}; call browser_navigate for it to take effect."
+        ))]))
+    }
+
+    #[tool(
+        description = "Advance the installed virtual clock, firing every due timer/interval/animation-frame callback in order. Requires browser_set_clock (and a browser_navigate since) first."
+    )]
+    async fn browser_advance_clock(
+        &self,
+        Parameters(AdvanceClockRequest { ms }): Parameters<AdvanceClockRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_session().await?;
+        let guard = self.session.lock().await;
+        let session = guard.as_ref().ok_or_else(no_session_error)?;
+        session.advance_clock(ms).await.map_err(map_engine_err)?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "virtual clock advanced by {ms}ms."
         ))]))
     }
 
@@ -593,6 +641,7 @@ impl ServerHandler for AibTools {
                  browser_network_record_start(name), browser_network_record_stop(), \
                  browser_network_replay_start(name), browser_network_replay_stop(), \
                  browser_add_init_script(source), browser_seed_randomness(seed), \
+                 browser_set_clock(time_ms), browser_advance_clock(ms), \
                  browser_close(). Refs come from the snapshot text, e.g. `[e6]` -> ref \"e6\". \
                  Actions do not auto-return a new snapshot; call browser_snapshot again after an \
                  action that may have changed the page. Use browser_record_start/stop to capture a \
@@ -616,7 +665,13 @@ impl ServerHandler for AibTools {
                  call browser_navigate for it to take effect. browser_seed_randomness(seed) is the \
                  same mechanism pre-built to override Math.random with a deterministic PRNG, so an \
                  app's own random IDs/variants/animations become reproducible across runs with the \
-                 same seed."
+                 same seed. browser_set_clock(time_ms) installs a virtual clock frozen at that epoch \
+                 time (also register before browser_navigate) -- Date/performance.now/setTimeout/ \
+                 setInterval/requestAnimationFrame all read from it, and time never moves on its own; \
+                 call browser_advance_clock(ms) at any point afterward to move it forward and fire \
+                 every due callback in order, e.g. to make a session-timeout warning or a debounced \
+                 handler fire instantly and deterministically instead of waiting for real time or \
+                 skipping the behavior."
                     .to_string(),
             )
     }
@@ -656,7 +711,7 @@ fn map_engine_err(e: engine::EngineError) -> McpError {
     use engine::EngineError::*;
     match e {
         StaleRef(_) | UnknownKey(_) | UnknownPersona(_) | UntrainedProfile(_) | AmbiguousPersona
-        | UnknownCassette(_) => McpError::invalid_params(e.to_string(), None),
+        | UnknownCassette(_) | Clock(_) => McpError::invalid_params(e.to_string(), None),
         ActionTimeout { .. } | WaitTimeout { .. } | Cdp(_) | Serde(_) | Recording(_) | Training(_)
         | Network(_) => McpError::internal_error(e.to_string(), None),
     }

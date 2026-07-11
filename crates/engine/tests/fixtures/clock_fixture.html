@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Clock Fixture</title></head>
+<body>
+  <main>
+    <h1>Clock Fixture</h1>
+    <p id="now"></p>
+    <p id="delayed">not yet</p>
+    <p id="chain-count">0</p>
+  </main>
+  <script>
+    document.getElementById('now').textContent = 'now=' + Date.now();
+
+    setTimeout(function () {
+      document.getElementById('delayed').textContent = 'fired';
+    }, 5000);
+
+    // First hop has a real delay; subsequent hops are scheduled with 0ms
+    // delay from within the previous hop's own callback, so a single
+    // advance past the first hop's delay should fire the whole chain.
+    var chainCount = 0;
+    function tick() {
+      chainCount++;
+      document.getElementById('chain-count').textContent = String(chainCount);
+      if (chainCount < 3) {
+        setTimeout(tick, 0);
+      }
+    }
+    setTimeout(tick, 100);
+  </script>
+</body>
+</html>

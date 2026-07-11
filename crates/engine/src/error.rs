@@ -49,6 +49,9 @@ pub enum EngineError {
 
     #[error("no cassette named {0:?}; run browser_network_record_start/browser_network_record_stop against it first")]
     UnknownCassette(String),
+
+    #[error("{0}")]
+    Clock(String),
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;

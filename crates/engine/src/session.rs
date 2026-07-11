@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 
 const RESOLVE_JS: &str = include_str!("../assets/resolve.js");
 const SEEDED_RANDOM_JS: &str = include_str!("../assets/seeded_random.js");
+const VIRTUAL_CLOCK_JS: &str = include_str!("../assets/virtual_clock.js");
 
 const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_ACTION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -178,6 +179,33 @@ impl Session {
     pub async fn seed_randomness(&self, seed: u64) -> Result<()> {
         let script = SEEDED_RANDOM_JS.replace("%SEED%", &(seed as u32).to_string());
         self.add_init_script(&script).await
+    }
+
+    /// Installs a virtual clock frozen at `time_ms` (epoch milliseconds),
+    /// via `add_init_script` -- overrides `Date`/`performance.now`/timers
+    /// to read from it (virtual-clock spec: "Agent-controlled virtual
+    /// clock"). Register before navigating, same as any init script.
+    pub async fn set_clock(&self, time_ms: u64) -> Result<()> {
+        let script = VIRTUAL_CLOCK_JS.replace("%START_TIME_MS%", &time_ms.to_string());
+        self.add_init_script(&script).await
+    }
+
+    /// Advances the installed virtual clock by `ms`, synchronously firing
+    /// every due `setTimeout`/`setInterval`/`requestAnimationFrame`
+    /// callback in chronological order (virtual-clock spec: "Explicit
+    /// clock advancement fires due timers in order"). Requires a clock to
+    /// already be installed via `set_clock` on the current page.
+    pub async fn advance_clock(&self, ms: u64) -> Result<()> {
+        let raw = self
+            .page
+            .evaluate(&format!("typeof window.__aibAdvanceClock === 'function' ? (window.__aibAdvanceClock({ms}), true) : false"))
+            .await?;
+        if raw.as_bool() != Some(true) {
+            return Err(EngineError::Clock(
+                "no virtual clock is installed on the current page; call browser_set_clock (and browser_navigate) first".to_string(),
+            ));
+        }
+        Ok(())
     }
 
     pub async fn navigate(&self, url: &str) -> Result<String> {
