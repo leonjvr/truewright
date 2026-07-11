@@ -87,3 +87,69 @@ pub struct LoadEventFired {
 impl CdpEvent for LoadEventFired {
     const METHOD: &'static str = "Page.loadEventFired";
 }
+
+pub struct StartScreencast;
+impl Command for StartScreencast {
+    const METHOD: &'static str = "Page.startScreencast";
+    type Params = StartScreencastParams;
+    type Response = super::EmptyResponse;
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartScreencastParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_width: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_height: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub every_nth_frame: Option<i64>,
+}
+
+pub struct StopScreencast;
+impl Command for StopScreencast {
+    const METHOD: &'static str = "Page.stopScreencast";
+    type Params = super::EmptyParams;
+    type Response = super::EmptyResponse;
+}
+
+pub struct ScreencastFrameAck;
+impl Command for ScreencastFrameAck {
+    const METHOD: &'static str = "Page.screencastFrameAck";
+    type Params = ScreencastFrameAckParams;
+    type Response = super::EmptyResponse;
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreencastFrameAckParams {
+    /// The frame's own `frame_ack_id` (browser-recording spec: distinct
+    /// from the CDP session id used for command/event routing).
+    pub session_id: i64,
+}
+
+/// One captured frame (browser-recording spec: "Screencast-based frame
+/// capture"). `frame_ack_id` is CDP's own per-frame sequence number, used
+/// only to ack this specific frame — unrelated to the CDP `sessionId` used
+/// to route commands/events to this page.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreencastFrame {
+    /// Base64-encoded JPEG bytes.
+    pub data: String,
+    pub metadata: ScreencastFrameMetadata,
+    #[serde(rename = "sessionId")]
+    pub frame_ack_id: i64,
+}
+impl CdpEvent for ScreencastFrame {
+    const METHOD: &'static str = "Page.screencastFrame";
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScreencastFrameMetadata {
+    pub timestamp: f64,
+}

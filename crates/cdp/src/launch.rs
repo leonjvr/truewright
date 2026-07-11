@@ -203,7 +203,7 @@ fn well_known_paths(kind: BrowserKind) -> Vec<PathBuf> {
 /// `$XDG_DATA_HOME` (falling back to `~/.local/share`) on Linux
 /// (browser-attach spec: "Launch with an isolated profile").
 #[allow(clippy::result_large_err)]
-pub(crate) fn profile_base_dir() -> Result<PathBuf> {
+pub fn profile_base_dir() -> Result<PathBuf> {
     #[cfg(windows)]
     {
         std::env::var_os("LOCALAPPDATA")

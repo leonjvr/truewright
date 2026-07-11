@@ -11,11 +11,12 @@ An LLM-first browser-testing engine: a single Rust binary that drives your insta
 - **Phase 0 (CDP spike) — done.** A minimal hand-rolled CDP client (`crates/cdp`) attaches to installed Chrome/Edge, creates an isolated browser context and page, navigates, evaluates JS, and captures a screenshot — all with typed commands over a flatten-session WebSocket connection.
 - **Phase 1 (agent MVP) — done.** `crates/engine` adds a session layer with an injected DOM/ARIA walker (token-efficient, ref-addressable snapshots), bounded-poll actionability, and click/type/press/wait_for/screenshot. `crates/mcp` + `aib mcp` expose it all as a stdio MCP server (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_press`, `browser_wait_for`, `browser_screenshot`, `browser_close`), verified end-to-end against a real page. This is a scoped-down slice of PROPOSAL.md's full vision — see `openspec/changes/archive/*-phase-1-agent-mvp/design.md` for exactly what's deferred (isolated-world injection, MutationObserver-driven actionability, human motion, multi-session daemon).
 - **Browser efficiency — done.** Headless launches get memory-reduction flags and an auto-downloaded, cached `chrome-headless-shell` (installed-browser fallback; `--browser installed` opt-out); `aib doctor` reports full process-tree memory per browser. Measured: headless-shell ~170–350 MB vs installed Chrome/Edge headless ~450–1550 MB for the same page, on both Windows and Linux.
-- **Next: screencast capture** (re-prioritized 2026-07-11 after the external-research review in `.research/REVIEW.md`): `Page.startScreencast`-based video recording (`browser_record_start`/`browser_record_stop`). The human-motion engine (original Phase 2) follows after that.
+- **Screencast capture — done.** `browser_record_start`/`browser_record_stop` record the page via CDP's `Page.startScreencast`, capped at 30s, and assemble a small animated GIF (JPEG frame sequence + timestamped manifest also saved to disk) — for verifying moving parts, not just static screenshots. GIF only in this phase; no WebM/MP4 (see below).
+- **Next: human-motion engine** (original Phase 2) — seeded, persona-based mouse/keyboard timing.
 
 ## MCP server
 
-Configure `aib mcp` as a stdio MCP server in an agent host (e.g. Claude Code, Claude Desktop). It lazily launches a browser on the first tool call and exposes: `browser_navigate(url)`, `browser_snapshot()`, `browser_click(ref)`, `browser_type(ref, text, submit?)`, `browser_press(key)`, `browser_wait_for(text, timeout_ms?)`, `browser_screenshot()`, `browser_close()`. Refs come from the snapshot text (e.g. `[e6]`).
+Configure `aib mcp` as a stdio MCP server in an agent host (e.g. Claude Code, Claude Desktop). It lazily launches a browser on the first tool call and exposes: `browser_navigate(url)`, `browser_snapshot()`, `browser_click(ref)`, `browser_type(ref, text, submit?)`, `browser_press(key)`, `browser_wait_for(text, timeout_ms?)`, `browser_screenshot()`, `browser_record_start(max_duration_ms?, quality?)`, `browser_record_stop()`, `browser_close()`. Refs come from the snapshot text (e.g. `[e6]`).
 
 ```
 aib mcp                        # headless, managed chrome-headless-shell (auto-downloaded/cached)
@@ -47,6 +48,16 @@ Exits non-zero if any step fails on any browser. See `openspec/specs/doctor-cli/
 ### Managed `chrome-headless-shell`
 
 Headless runs auto-download and cache the stripped, headless-only `chrome-headless-shell` binary (from Chrome for Testing) on first use — a deliberate, documented exception to the "no downloads" principle, made because the browser binary, not the driver, dominates memory cost (see `.research/REVIEW.md`). It's cached under `<data-dir>/aib/browsers/<version>/` and reused offline afterwards; if resolution or download fails, `aib` falls back to the installed browser automatically. Headed runs, and `--browser installed`, always use the installed browser and never touch the network.
+
+## Recording (`browser_record_start` / `browser_record_stop`)
+
+Captures a short video of the page via CDP's screencast API — for verifying animations, transitions, or drag interactions actually happened, not just that one frame looks right:
+
+- One recording at a time per session; `browser_record_start` fails if one is already active.
+- Hard-capped at 30 seconds regardless of the requested `max_duration_ms`, so a forgotten `browser_record_stop` can't grow unbounded.
+- Frames are captured at 480×360, every 3rd repaint, JPEG quality 60 by default — kept small on purpose; this is a "did it move correctly" check, not pixel-perfect capture.
+- `browser_record_stop` writes the JPEG frame sequence and a `manifest.json` (real per-frame timestamps) to `<data-dir>/aib/recordings/<id>/`, assembles `clip.gif` from them (delays derived from the real timestamps, not a fixed rate), and returns the directory path, frame count, duration, and one preview frame as inline image content.
+- **GIF only — no WebM/MP4.** Neither the host nor `docker/Dockerfile`'s test image has `ffmpeg` available, and this project doesn't ship encoding paths it hasn't actually run (see `openspec/changes/archive/*-screencast-capture/design.md`).
 
 ## Testing in Docker
 

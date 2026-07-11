@@ -6,7 +6,7 @@ use crate::connection::Connection;
 use crate::error::{CdpError, Result};
 use crate::launch::{self, BrowserKind, DiscoveredBrowser, LaunchedBrowser};
 use crate::protocol::{browser, input, page, runtime, target};
-use crate::session::{EventItem, Session};
+use crate::session::{CdpEvent, EventItem, EventStream, Session};
 use base64::Engine;
 use std::time::Duration;
 
@@ -96,6 +96,7 @@ impl BrowserContext {
     }
 }
 
+#[derive(Clone)]
 pub struct Page {
     browser_session: Session,
     session: Session,
@@ -215,6 +216,36 @@ impl Page {
                 })
                 .await?;
         }
+        Ok(())
+    }
+
+    /// Subscribes to a typed event on this page's session (browser-recording
+    /// spec: rides the same bounded event-stream infrastructure as
+    /// `navigate_and_wait`'s lifecycle events).
+    pub fn events<E: CdpEvent>(&self) -> EventStream<E> {
+        self.session.events::<E>()
+    }
+
+    pub async fn start_screencast(&self, params: page::StartScreencastParams) -> Result<()> {
+        self.session
+            .execute::<page::StartScreencast>(params)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn stop_screencast(&self) -> Result<()> {
+        self.session
+            .execute::<page::StopScreencast>(Default::default())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn ack_screencast_frame(&self, frame_ack_id: i64) -> Result<()> {
+        self.session
+            .execute::<page::ScreencastFrameAck>(page::ScreencastFrameAckParams {
+                session_id: frame_ack_id,
+            })
+            .await?;
         Ok(())
     }
 }

@@ -28,6 +28,9 @@ pub enum EngineError {
 
     #[error("failed to parse walker/resolve response: {0}")]
     Serde(#[from] serde_json::Error),
+
+    #[error("recording failed: {0}")]
+    Recording(String),
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;

@@ -1,5 +1,6 @@
 use crate::error::{EngineError, Result};
 use crate::keys;
+use crate::recording::{Recording, RecordingOptions};
 use crate::snapshot::{self, SnapshotResult};
 use serde::Deserialize;
 use std::time::{Duration, Instant};
@@ -137,6 +138,16 @@ impl Session {
 
     pub async fn screenshot(&self) -> Result<Vec<u8>> {
         Ok(self.page.screenshot().await?)
+    }
+
+    /// Starts a screencast recording (browser-recording spec). Artifacts
+    /// land under `<data-dir>/aib/recordings/<id>/` once `Recording::stop`
+    /// is called.
+    pub async fn start_recording(&self, options: RecordingOptions) -> Result<Recording> {
+        let recordings_base = cdp::launch::profile_base_dir()?
+            .join("aib")
+            .join("recordings");
+        Recording::start(&self.page, options, recordings_base).await
     }
 
     /// Tears the session down: page, context, and (if we launched it) the

@@ -23,6 +23,7 @@ rmcp = { version = "2", features = ["server", "macros", "transport-io"] }
 ureq = { version = "3", features = ["json"] }
 zip = { version = "6", default-features = false, features = ["deflate"] }
 sysinfo = "0.37"
+image = { version = "0.25", default-features = false, features = ["jpeg", "gif"] }
 
 [package]
 name = "aib"

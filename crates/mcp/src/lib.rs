@@ -46,11 +46,24 @@ pub struct WaitForRequest {
     pub timeout_ms: Option<u64>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RecordStartRequest {
+    #[serde(default)]
+    #[schemars(
+        description = "Maximum recording length in milliseconds (default and hard cap: 30000)"
+    )]
+    pub max_duration_ms: Option<u64>,
+    #[serde(default)]
+    #[schemars(description = "JPEG quality 0-100 (default 60)")]
+    pub quality: Option<u8>,
+}
+
 const DEFAULT_WAIT_FOR_MS: u64 = 5000;
 
 #[derive(Clone)]
 pub struct AibTools {
     session: Arc<Mutex<Option<engine::Session>>>,
+    recording: Arc<Mutex<Option<engine::Recording>>>,
     headless: bool,
     browser_pref: cdp::launch::BrowserPreference,
     // Read by the `#[tool_handler]`-generated `ServerHandler` impl to route
@@ -68,6 +81,7 @@ impl AibTools {
     pub fn with_browser_pref(headless: bool, browser_pref: cdp::launch::BrowserPreference) -> Self {
         Self {
             session: Arc::new(Mutex::new(None)),
+            recording: Arc::new(Mutex::new(None)),
             headless,
             browser_pref,
             tool_router: Self::tool_router(),
@@ -188,6 +202,80 @@ impl AibTools {
         )]))
     }
 
+    #[tool(
+        description = "Start recording the page (video, up to 30s). Fails if a recording is already active."
+    )]
+    async fn browser_record_start(
+        &self,
+        Parameters(RecordStartRequest {
+            max_duration_ms,
+            quality,
+        }): Parameters<RecordStartRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_session().await?;
+
+        let mut recording_guard = self.recording.lock().await;
+        if recording_guard.is_some() {
+            return Err(McpError::invalid_params(
+                "a recording is already in progress; call browser_record_stop first",
+                None,
+            ));
+        }
+
+        let session_guard = self.session.lock().await;
+        let session = session_guard.as_ref().ok_or_else(no_session_error)?;
+
+        let mut options = engine::RecordingOptions::default();
+        if let Some(ms) = max_duration_ms {
+            options.max_duration = std::time::Duration::from_millis(ms);
+        }
+        if let Some(q) = quality {
+            options.quality = q;
+        }
+
+        let recording = session
+            .start_recording(options)
+            .await
+            .map_err(map_engine_err)?;
+        *recording_guard = Some(recording);
+
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            "recording started. Call browser_record_stop to finish (auto-stops after 30s).",
+        )]))
+    }
+
+    #[tool(
+        description = "Stop the active recording; returns the artifact directory, frame count, duration, and a preview frame"
+    )]
+    async fn browser_record_stop(&self) -> Result<CallToolResult, McpError> {
+        let recording = self
+            .recording
+            .lock()
+            .await
+            .take()
+            .ok_or_else(|| McpError::invalid_params("no recording is in progress", None))?;
+
+        let output = recording.stop().await.map_err(map_engine_err)?;
+
+        let summary = format!(
+            "recording stopped: {} frames over {:.0}ms, saved to {}{}",
+            output.frame_count,
+            output.duration_ms,
+            output.dir.display(),
+            output
+                .gif_path
+                .as_ref()
+                .map(|p| format!(" (gif: {})", p.display()))
+                .unwrap_or_default()
+        );
+
+        let mut content = vec![ContentBlock::text(summary)];
+        if let Some(preview) = output.preview_jpeg {
+            content.push(ContentBlock::image(base64_encode(&preview), "image/jpeg"));
+        }
+        Ok(CallToolResult::success(content))
+    }
+
     #[tool(description = "Close the browser session")]
     async fn browser_close(&self) -> Result<CallToolResult, McpError> {
         let mut guard = self.session.lock().await;
@@ -213,9 +301,11 @@ impl ServerHandler for AibTools {
                 "Drives a real Chrome/Edge browser. Tools: browser_navigate(url), \
                  browser_snapshot(), browser_click(ref), browser_type(ref, text, submit?), \
                  browser_press(key), browser_wait_for(text, timeout_ms?), browser_screenshot(), \
+                 browser_record_start(max_duration_ms?, quality?), browser_record_stop(), \
                  browser_close(). Refs come from the snapshot text, e.g. `[e6]` -> ref \"e6\". \
                  Actions do not auto-return a new snapshot; call browser_snapshot again after \
-                 an action that may have changed the page."
+                 an action that may have changed the page. Use browser_record_start/stop to \
+                 capture a short GIF of moving/animated parts instead of a single screenshot."
                     .to_string(),
             )
     }
@@ -225,7 +315,7 @@ fn map_engine_err(e: engine::EngineError) -> McpError {
     use engine::EngineError::*;
     match e {
         StaleRef(_) | UnknownKey(_) => McpError::invalid_params(e.to_string(), None),
-        ActionTimeout { .. } | WaitTimeout { .. } | Cdp(_) | Serde(_) => {
+        ActionTimeout { .. } | WaitTimeout { .. } | Cdp(_) | Serde(_) | Recording(_) => {
             McpError::internal_error(e.to_string(), None)
         }
     }

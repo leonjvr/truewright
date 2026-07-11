@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Animated</title>
+  <style>
+    body { margin: 0; background: #fff; }
+    #box {
+      width: 60px;
+      height: 60px;
+      background: #e11d48;
+      position: relative;
+      animation: slide 1s linear infinite;
+    }
+    @keyframes slide {
+      from { left: 0px; }
+      to { left: 300px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="box"></div>
+  <p id="counter">0</p>
+  <script>
+    let n = 0;
+    setInterval(() => {
+      n += 1;
+      document.getElementById('counter').textContent = String(n);
+    }, 100);
+  </script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+== initialize ==
+== browser_navigate (watch for the window with a sliding red box) ==
+page: "Animated" url: file:///C:/Users/leon/repos/ai-browser/crates/engine/tests/fixtures/animated.html
+  - text "0"
+
+== browser_record_start (recording the animation for 3s) ==
+recording started. Call browser_record_stop to finish (auto-stops after 30s).
+== browser_record_stop ==
+recording stopped: 59 frames over 2898ms, saved to C:\Users\leon\AppData\Local\aib\recordings\1783754628842734200 (gif: C:\Users\leon\AppData\Local\aib\recordings\1783754628842734200\clip.gif)
+[image content: image/jpeg, 2008 base64 chars]
+== browser_close ==
+[stderr] [2m2026-07-11T07:24:06.470673Z[0m [33m WARN[0m [2mcdp::connection[0m[2m:[0m cdp transport recv failed [3merror[0m[2m=[0mwebsocket error: IO error: An existing connection was forcibly closed by the remote host. (os error 10054)
+session closed
+DONE
