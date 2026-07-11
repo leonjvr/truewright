@@ -1,0 +1,30 @@
+## ADDED Requirements
+
+### Requirement: Real OS-level input dispatch on Windows
+The engine SHALL support dispatching mouse and keyboard input through the real Windows input pipeline (`SendInput`), as an alternative to CDP-synthesized dispatch, selected by a `true_input` parameter on click and type actions. Dispatched events SHALL use the same timing synthesis (`mouse_path`/`typing_timeline`, synthetic or trained persona) already used for CDP dispatch -- only the delivery mechanism changes.
+
+#### Scenario: A click is dispatched via real OS input
+- **WHEN** `browser_click` is called with `true_input: true` against a headed session
+- **THEN** the engine locates the browser's OS window, brings it to the foreground, translates the target viewport coordinate to a screen coordinate, and dispatches the click via `SendInput` rather than CDP's `Input.dispatchMouseEvent`
+
+#### Scenario: Typed text is dispatched via real OS input
+- **WHEN** `browser_type` is called with `true_input: true` against a headed session
+- **THEN** each character is dispatched via `SendInput`'s Unicode keyboard mode, following the same per-character timing already used for CDP-dispatched typing
+
+### Requirement: Headless and non-Windows rejection
+The engine SHALL reject `true_input: true` with a clear, typed error when the session is headless or the host platform is not Windows, rather than silently falling back to CDP dispatch.
+
+#### Scenario: true_input requested on a headless session
+- **WHEN** `browser_click` or `browser_type` is called with `true_input: true` against a headless session
+- **THEN** the call fails with an error explaining that real OS input requires a visible, headed window
+
+#### Scenario: true_input requested on a non-Windows host
+- **WHEN** `browser_click` or `browser_type` is called with `true_input: true` on a non-Windows platform
+- **THEN** the call fails with an error explaining that this platform is not yet supported
+
+### Requirement: Viewport-to-screen coordinate translation
+The engine SHALL translate CDP viewport coordinates to OS screen coordinates using the target page's own reported window geometry (`window.screenX`/`screenY`/`outerWidth`/`outerHeight`/`innerWidth`/`innerHeight`/`devicePixelRatio`), so that clicks land on the intended page element regardless of the current display scaling or browser zoom level.
+
+#### Scenario: Coordinate translation accounts for browser chrome and scaling
+- **WHEN** a viewport coordinate is translated to a screen coordinate for real OS dispatch
+- **THEN** the resulting screen coordinate accounts for the browser window's on-screen position, its toolbar/tab-bar height, and the page's current device pixel ratio
