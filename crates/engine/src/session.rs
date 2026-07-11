@@ -47,6 +47,15 @@ pub struct Session {
     /// (popup-auto-attach spec: "Predictable fallback when the active page
     /// closes").
     primary_target_id: String,
+    /// Every attached cross-origin OOPIF, keyed by frame id (== target id
+    /// for `iframe`-type targets), plus the stable namespacing tag
+    /// (`f1`, `f2`, ...) assigned the first time each was seen
+    /// (cross-origin-oopif spec: "Discovery/attach").
+    oopif_pages: Mutex<HashMap<String, OopifEntry>>,
+    /// Next tag to assign to a newly discovered OOPIF (cross-origin-oopif
+    /// spec: ref namespacing is first-seen-order, not re-derived per
+    /// snapshot, so a frame keeps the same tag across calls).
+    oopif_tag_counter: Mutex<u64>,
     /// Last dispatched mouse position, so a human-like move starts from
     /// wherever the cursor actually is instead of teleporting (human-motion
     /// spec: "Curved, timed mouse movement to a target").
@@ -102,6 +111,13 @@ struct Coordinates {
     height: f64,
 }
 
+/// One attached cross-origin OOPIF (cross-origin-oopif spec).
+#[derive(Clone)]
+struct OopifEntry {
+    page: cdp::ops::Page,
+    tag: String,
+}
+
 /// One attached page, as reported by `Session::list_pages` (popup-auto-attach
 /// spec).
 #[derive(Debug, Clone)]
@@ -127,13 +143,28 @@ impl Session {
         headless: bool,
         pref: cdp::launch::BrowserPreference,
     ) -> Result<Self> {
+        Self::launch_with_flags(profile_name, headless, pref, &[]).await
+    }
+
+    /// Same as `launch_with`, with additional raw Chrome command-line flags.
+    /// Exists for tests that need a specific Chrome behavior (e.g.
+    /// `--site-per-process`, cross-origin-oopif spec) without adding a flag
+    /// to the product's own CLI/MCP surface for a test-only concern.
+    pub async fn launch_with_flags(
+        profile_name: &str,
+        headless: bool,
+        pref: cdp::launch::BrowserPreference,
+        extra_chrome_args: &[&str],
+    ) -> Result<Self> {
         let discovered = if headless {
             cdp::launch::resolve_headless_browser(pref).await?
         } else {
             let mut found = cdp::launch::discover_browsers()?;
             found.remove(0)
         };
-        let launched = cdp::launch::launch(&discovered, profile_name, headless).await?;
+        let launched =
+            cdp::launch::launch_with_flags(&discovered, profile_name, headless, extra_chrome_args)
+                .await?;
 
         let browser = cdp::ops::Browser::connect(&launched.ws_url).await?;
         let context = browser.new_context().await?;
@@ -148,6 +179,8 @@ impl Session {
             pages: Mutex::new(pages),
             active_target_id: Mutex::new(target_id.clone()),
             primary_target_id: target_id,
+            oopif_pages: Mutex::new(HashMap::new()),
+            oopif_tag_counter: Mutex::new(0),
             mouse_pos: Mutex::new((0.0, 0.0)),
             training_active: Arc::new(AtomicBool::new(false)),
             action_trace_sink: Arc::new(Mutex::new(None)),
@@ -173,41 +206,72 @@ impl Session {
 
     /// Non-blocking drain of any newly discovered/destroyed targets noticed
     /// browser-wide since the last poll (popup-auto-attach spec: "Automatic
-    /// attach to new top-level targets"). Filtered to top-level page targets
-    /// belonging to this session's own context -- other browser contexts'
-    /// targets and cross-origin OOPIF (iframe-type) targets are both out of
-    /// scope for this slice and ignored, not tracked as pages.
+    /// attach to new top-level targets"). Filtered to targets belonging to
+    /// this session's own context; `page`-type targets are tracked as pages,
+    /// `iframe`-type targets (cross-origin OOPIFs) are tracked separately
+    /// and never become the active page (cross-origin-oopif spec:
+    /// "Discovery/attach") -- both share this one poll of the discovery
+    /// event stream rather than each draining it independently, since
+    /// `EventStream` is a single-consumer cursor.
     async fn refresh_attached_pages(&self) {
         let created = self.context.poll_created_targets().await;
         let destroyed = self.context.poll_destroyed_targets().await;
 
         for ev in created {
             let info = ev.target_info;
-            if info.target_type != "page" {
-                continue;
-            }
             if info.browser_context_id.as_deref() != Some(self.context.context_id()) {
                 continue;
             }
-            if self.pages.lock().await.contains_key(&info.target_id) {
-                continue; // already tracked (e.g. this session's own primary page)
-            }
-            match self
-                .context
-                .attach_existing_target(info.target_id.clone())
-                .await
-            {
-                Ok(new_page) => {
-                    self.pages.lock().await.insert(info.target_id, new_page);
+
+            if info.target_type == "page" {
+                if self.pages.lock().await.contains_key(&info.target_id) {
+                    continue; // already tracked (e.g. this session's own primary page)
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to attach newly discovered target");
+                match self
+                    .context
+                    .attach_existing_target(info.target_id.clone())
+                    .await
+                {
+                    Ok(new_page) => {
+                        self.pages.lock().await.insert(info.target_id, new_page);
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to attach newly discovered target");
+                    }
+                }
+            } else if info.target_type == "iframe" {
+                if self.oopif_pages.lock().await.contains_key(&info.target_id) {
+                    continue;
+                }
+                match self
+                    .context
+                    .attach_existing_target(info.target_id.clone())
+                    .await
+                {
+                    Ok(oopif_page) => {
+                        let tag = {
+                            let mut counter = self.oopif_tag_counter.lock().await;
+                            *counter += 1;
+                            format!("f{counter}")
+                        };
+                        self.oopif_pages.lock().await.insert(
+                            info.target_id,
+                            OopifEntry {
+                                page: oopif_page,
+                                tag,
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to attach newly discovered OOPIF target");
+                    }
                 }
             }
         }
 
         for ev in destroyed {
             self.forget_page(&ev.target_id).await;
+            self.oopif_pages.lock().await.remove(&ev.target_id);
         }
     }
 
@@ -409,10 +473,14 @@ impl Session {
     /// when no trace is active.
     async fn log_action(&self, text: String) {
         if let Some(active) = self.action_trace_sink.lock().await.as_ref() {
-            active.entries.lock().await.push(crate::console::TraceEntry::Action {
-                text,
-                timestamp_ms: crate::console::now_ms(),
-            });
+            active
+                .entries
+                .lock()
+                .await
+                .push(crate::console::TraceEntry::Action {
+                    text,
+                    timestamp_ms: crate::console::now_ms(),
+                });
         }
     }
 
@@ -426,15 +494,69 @@ impl Session {
     }
 
     /// Evaluates the injected walker and renders its tree as text
-    /// (page-snapshot spec: "Injected accessibility-style walker").
+    /// (page-snapshot spec: "Injected accessibility-style walker"). Splices
+    /// in the real content of any cross-origin iframe backed by an attached
+    /// OOPIF target, in place of the "not inspectable" placeholder
+    /// (cross-origin-oopif spec: "Snapshot splicing").
     pub async fn snapshot(&self) -> Result<String> {
-        let raw = self
-            .active_page()
-            .await
-            .evaluate(snapshot::WALKER_JS)
-            .await?;
-        let parsed: SnapshotResult = serde_json::from_value(raw)?;
+        self.refresh_attached_pages().await;
+        let page = self.active_page().await;
+
+        let raw = page.evaluate(snapshot::WALKER_JS).await?;
+        let mut parsed: SnapshotResult = serde_json::from_value(raw)?;
+
+        if let Some(tree) = parsed.tree.as_mut() {
+            self.splice_oopif_children(&page, tree).await;
+        }
+
         Ok(snapshot::render(&parsed))
+    }
+
+    /// Recursively finds iframe nodes whose ref correlates to an attached
+    /// OOPIF and replaces their placeholder children with that OOPIF's own
+    /// walked, ref-namespaced content (cross-origin-oopif spec). Scoping to
+    /// "does this OOPIF actually belong to this page" and "finding which
+    /// element owns it" are the same call: `DOM.getFrameOwner` on this
+    /// page's own session can only find a `backendNodeId` if that frame is
+    /// actually embedded somewhere in this page's own DOM -- `Page.
+    /// getFrameTree` was tried first and confirmed (via live testing) not
+    /// to report cross-process children at all, since it only sees frames
+    /// within its own target's renderer process, so it's not used here.
+    /// Best-effort throughout: a correlation or evaluate failure for one
+    /// OOPIF just leaves that node's existing "not inspectable" placeholder
+    /// in place rather than failing the whole snapshot.
+    async fn splice_oopif_children(&self, page: &cdp::ops::Page, node: &mut snapshot::WalkerNode) {
+        let oopifs: Vec<(String, OopifEntry)> = self
+            .oopif_pages
+            .lock()
+            .await
+            .iter()
+            .map(|(id, entry)| (id.clone(), entry.clone()))
+            .collect();
+        if oopifs.is_empty() {
+            return;
+        }
+
+        for (frame_id, entry) in oopifs {
+            let owner_ref = match page.ref_for_frame_owner(&frame_id).await {
+                Ok(Some(r)) => r,
+                _ => continue,
+            };
+            let Some(target) = find_node_by_ref(node, &owner_ref) else {
+                continue;
+            };
+            let Ok(raw) = entry.page.evaluate(snapshot::WALKER_JS).await else {
+                continue;
+            };
+            let Ok(oopif_result) = serde_json::from_value::<SnapshotResult>(raw) else {
+                continue;
+            };
+            if let Some(mut oopif_tree) = oopif_result.tree {
+                namespace_refs(&mut oopif_tree, &entry.tag);
+                target.name = Some(format!("cross-origin frame (OOPIF, id={})", entry.tag));
+                target.children = vec![oopif_tree];
+            }
+        }
     }
 
     pub async fn click(&self, r#ref: &str) -> Result<()> {
@@ -689,10 +811,14 @@ impl Session {
         // logging never fails the screenshot call").
         if let Some(active) = self.action_trace_sink.lock().await.as_ref() {
             if let Ok(path) = crate::console::save_screenshot(&active.name, &bytes) {
-                active.entries.lock().await.push(crate::console::TraceEntry::Screenshot {
-                    path: path.display().to_string(),
-                    timestamp_ms: crate::console::now_ms(),
-                });
+                active
+                    .entries
+                    .lock()
+                    .await
+                    .push(crate::console::TraceEntry::Screenshot {
+                        path: path.display().to_string(),
+                        timestamp_ms: crate::console::now_ms(),
+                    });
             }
         }
 
@@ -965,10 +1091,74 @@ impl Session {
         ))
     }
 
-    async fn resolve_ref(&self, r#ref: &str) -> Result<ResolveResult> {
+    async fn resolve_local_ref(&self, page: &cdp::ops::Page, r#ref: &str) -> Result<ResolveResult> {
         let script = format!("({RESOLVE_JS})({})", serde_json::to_string(r#ref)?);
-        let raw = self.active_page().await.evaluate(&script).await?;
+        let raw = page.evaluate(&script).await?;
         Ok(serde_json::from_value(raw)?)
+    }
+
+    /// Resolves a ref, recognizing the `f<N>:` namespace prefix for a ref
+    /// that came from inside an attached OOPIF (cross-origin-oopif spec:
+    /// "Correct click/type coordinates"). Resolves the local point inside
+    /// the OOPIF's own session (`resolve.js` needs no changes there --
+    /// `window.frameElement` is already `null` inside a cross-origin child
+    /// by browser design, so its ancestor-walk loop naturally stops),
+    /// then adds the OOPIF's own on-screen position -- itself resolved via
+    /// the already-correlated top-level ref for the iframe host element --
+    /// to translate into top-level-page viewport coordinates.
+    async fn resolve_ref(&self, r#ref: &str) -> Result<ResolveResult> {
+        let not_found = ResolveResult {
+            ok: false,
+            visible: false,
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        };
+
+        let Some((tag, inner_ref)) = r#ref.split_once(':') else {
+            return self
+                .resolve_local_ref(&self.active_page().await, r#ref)
+                .await;
+        };
+
+        let found = self
+            .oopif_pages
+            .lock()
+            .await
+            .iter()
+            .find(|(_, e)| e.tag == tag)
+            .map(|(id, e)| (id.clone(), e.clone()));
+        let Some((frame_id, entry)) = found else {
+            return Ok(not_found);
+        };
+
+        let local = self.resolve_local_ref(&entry.page, inner_ref).await?;
+        if !local.ok {
+            return Ok(local);
+        }
+
+        let page = self.active_page().await;
+        let owner_ref = match page.ref_for_frame_owner(&frame_id).await {
+            Ok(Some(r)) => r,
+            _ => return Ok(not_found),
+        };
+        let owner = self.resolve_local_ref(&page, &owner_ref).await?;
+        if !owner.ok {
+            return Ok(not_found);
+        }
+
+        let top_left_x = owner.x - owner.width / 2.0;
+        let top_left_y = owner.y - owner.height / 2.0;
+
+        Ok(ResolveResult {
+            ok: true,
+            visible: local.visible && owner.visible,
+            x: top_left_x + local.x,
+            y: top_left_y + local.y,
+            width: local.width,
+            height: local.height,
+        })
     }
 
     /// Bounded-poll actionability gate: resolve until visible and stable
@@ -1022,4 +1212,37 @@ fn rects_close(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> bool {
         && (a.1 - b.1).abs() < STABLE_EPSILON_PX
         && (a.2 - b.2).abs() < STABLE_EPSILON_PX
         && (a.3 - b.3).abs() < STABLE_EPSILON_PX
+}
+
+/// Depth-first search for the node carrying `target_ref` (cross-origin-oopif
+/// spec: finds the iframe node an OOPIF's owner ref correlates to, so its
+/// placeholder children can be replaced with the OOPIF's real content).
+fn find_node_by_ref<'a>(
+    node: &'a mut snapshot::WalkerNode,
+    target_ref: &str,
+) -> Option<&'a mut snapshot::WalkerNode> {
+    if node.element_ref.as_deref() == Some(target_ref) {
+        return Some(node);
+    }
+    for child in &mut node.children {
+        if let Some(found) = find_node_by_ref(child, target_ref) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Prefixes every ref in `node` and its descendants with `tag:` (e.g.
+/// `e3` -> `f1:e3`), so a ref sourced from an OOPIF's own local registry
+/// can't collide with the top page's (cross-origin-oopif spec: "Ref
+/// namespacing"). Also correctly namespaces any further-nested same-origin
+/// iframe refs within the OOPIF's own content, for free -- they're just
+/// more refs in the same subtree.
+fn namespace_refs(node: &mut snapshot::WalkerNode, tag: &str) {
+    if let Some(r) = &node.element_ref {
+        node.element_ref = Some(format!("{tag}:{r}"));
+    }
+    for child in &mut node.children {
+        namespace_refs(child, tag);
+    }
 }

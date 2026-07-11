@@ -5,7 +5,7 @@
 use crate::connection::Connection;
 use crate::error::{CdpError, Result};
 use crate::launch::{self, BrowserKind, DiscoveredBrowser, LaunchedBrowser};
-use crate::protocol::{browser, fetch, input, network, page, runtime, target};
+use crate::protocol::{browser, dom, fetch, input, network, page, runtime, target};
 use crate::session::{CdpEvent, EventItem, EventStream, Session};
 use base64::Engine;
 use std::time::Duration;
@@ -237,6 +237,68 @@ impl Page {
                 target_id: self.target_id.clone(),
             })
             .await
+    }
+
+    /// Gets (or creates, via the exact same `refFor` logic `walker.js`
+    /// itself uses) the top-level ref for the `<iframe>` element that owns
+    /// `frame_id` -- correlating a cross-process OOPIF target back to a
+    /// specific node in this page's own walked snapshot tree
+    /// (cross-origin-oopif spec: frame-to-element correlation). Returns
+    /// `Ok(None)`, not an error, if the frame is gone or has no findable
+    /// owner (e.g. it detached between discovery and this call) -- a
+    /// vanished frame shouldn't fail the whole snapshot.
+    pub async fn ref_for_frame_owner(&self, frame_id: &str) -> Result<Option<String>> {
+        self.session
+            .execute::<dom::Enable>(Default::default())
+            .await?;
+
+        let owner = match self
+            .session
+            .execute::<dom::GetFrameOwner>(dom::GetFrameOwnerParams {
+                frame_id: frame_id.to_string(),
+            })
+            .await
+        {
+            Ok(resp) => resp,
+            Err(_) => return Ok(None),
+        };
+
+        let resolved = match self
+            .session
+            .execute::<dom::ResolveNode>(dom::ResolveNodeParams {
+                backend_node_id: owner.backend_node_id,
+            })
+            .await
+        {
+            Ok(resp) => resp,
+            Err(_) => return Ok(None),
+        };
+        let Some(object_id) = resolved.object.object_id else {
+            return Ok(None);
+        };
+
+        const GET_OR_CREATE_REF_JS: &str = "function() {
+            window.__aib = window.__aib || { refs: new Map(), elRefs: new WeakMap(), counter: 0 };
+            var ref = window.__aib.elRefs.get(this);
+            if (!ref) {
+                ref = 'e' + (++window.__aib.counter);
+                window.__aib.elRefs.set(this, ref);
+                window.__aib.refs.set(ref, this);
+            }
+            return ref;
+        }";
+        let resp = self
+            .session
+            .execute::<runtime::CallFunctionOn>(runtime::CallFunctionOnParams {
+                object_id,
+                function_declaration: GET_OR_CREATE_REF_JS.to_string(),
+                return_by_value: true,
+            })
+            .await?;
+        if resp.exception_details.is_some() {
+            return Ok(None);
+        }
+        Ok(resp.result.value.and_then(|v| v.as_str().map(String::from)))
     }
 
     pub async fn evaluate(&self, expression: &str) -> Result<serde_json::Value> {

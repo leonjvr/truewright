@@ -281,6 +281,20 @@ pub async fn launch(
     profile_name: &str,
     headless: bool,
 ) -> Result<LaunchedBrowser> {
+    launch_with_flags(browser, profile_name, headless, &[]).await
+}
+
+/// Same as [`launch`], with additional raw command-line flags appended.
+/// Exists for tests that need a specific Chrome behavior (e.g.
+/// `--site-per-process` to force genuine OOPIF creation for a cross-origin
+/// fixture, cross-origin-oopif spec) without adding a flag to the product's
+/// own CLI/MCP surface for a test-only concern.
+pub async fn launch_with_flags(
+    browser: &DiscoveredBrowser,
+    profile_name: &str,
+    headless: bool,
+    extra_args: &[&str],
+) -> Result<LaunchedBrowser> {
     let user_data_dir = profile_base_dir()?
         .join("aib")
         .join("profiles")
@@ -341,6 +355,9 @@ pub async fn launch(
         if !browser.is_headless_shell {
             cmd.arg("--headless=new");
         }
+    }
+    for arg in extra_args {
+        cmd.arg(arg);
     }
 
     let child = cmd
@@ -455,9 +472,7 @@ mod tests {
     // test-runner isolation that doesn't actually exist here.
     #[tokio::test]
     async fn aib_chrome_path_overrides_discovery_and_the_managed_headless_shell() {
-        let real_chrome = discover_browsers()
-            .ok()
-            .map(|found| found[0].path.clone());
+        let real_chrome = discover_browsers().ok().map(|found| found[0].path.clone());
         let Some(real_chrome) = real_chrome else {
             eprintln!(
                 "skipping aib_chrome_path_overrides_discovery_and_the_managed_headless_shell: no installed browser found"

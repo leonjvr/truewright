@@ -1,4 +1,5 @@
 pub mod browser;
+pub mod dom;
 pub mod fetch;
 pub mod input;
 pub mod network;

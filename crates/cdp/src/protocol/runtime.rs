@@ -137,4 +137,32 @@ pub struct RemoteObject {
     pub value: Option<Value>,
     #[serde(default)]
     pub description: Option<String>,
+    /// Present on a live handle (e.g. `DOM.resolveNode`'s result); absent
+    /// when `returnByValue` was requested instead (cross-origin-oopif spec:
+    /// frame-owner correlation needs the handle to call a function on it).
+    #[serde(default)]
+    pub object_id: Option<String>,
+}
+
+pub struct CallFunctionOn;
+impl Command for CallFunctionOn {
+    const METHOD: &'static str = "Runtime.callFunctionOn";
+    type Params = CallFunctionOnParams;
+    type Response = CallFunctionOnResponse;
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallFunctionOnParams {
+    pub object_id: String,
+    pub function_declaration: String,
+    pub return_by_value: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallFunctionOnResponse {
+    pub result: RemoteObject,
+    #[serde(default)]
+    pub exception_details: Option<Value>,
 }

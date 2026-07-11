@@ -23,11 +23,22 @@ pub struct TestServer {
 
 impl TestServer {
     pub async fn start(routes: HashMap<String, Route>) -> Self {
+        Self::start_with(|_port| routes).await
+    }
+
+    /// Same as `start`, but `build_routes` receives the OS-assigned port
+    /// before routes are fixed -- needed when a route's own body has to
+    /// reference this same server's port (e.g. a top page whose iframe
+    /// `src` points at a second hostname on this same server, cross-origin-
+    /// oopif spec: both origins are served by one listener, since routing
+    /// here is by request path, not by which hostname/port the connection
+    /// nominally arrived on).
+    pub async fn start_with(build_routes: impl FnOnce(u16) -> HashMap<String, Route>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind test server");
         let port = listener.local_addr().expect("local addr").port();
-        let routes = Arc::new(routes);
+        let routes = Arc::new(build_routes(port));
         let (stop_tx, mut stop_rx) = oneshot::channel();
 
         let handle = tokio::spawn(async move {
@@ -52,6 +63,18 @@ impl TestServer {
 
     pub fn url(&self, path: &str) -> String {
         format!("http://127.0.0.1:{}{path}", self.port)
+    }
+
+    /// Same server, a different hostname in the URL -- the TCP connection
+    /// itself doesn't care what name was used to resolve to this loopback
+    /// port (routing here is by path, not `Host` header), but the
+    /// *browser's* notion of origin does, which is exactly what's needed to
+    /// force a real cross-site iframe for OOPIF testing (`.localhost` is
+    /// reserved, RFC 6761, and resolves to loopback without `/etc/hosts`
+    /// edits; two different `.localhost` subdomains are different
+    /// registrable domains/sites, unlike two ports on plain `127.0.0.1`).
+    pub fn url_on(&self, host: &str, path: &str) -> String {
+        format!("http://{host}:{}{path}", self.port)
     }
 
     pub async fn stop(mut self) {
@@ -89,7 +112,11 @@ async fn handle_connection(stream: TcpStream, routes: Arc<HashMap<String, Route>
 
     let (status_line, content_type, body) = match routes.get(&path) {
         Some(route) => ("HTTP/1.1 200 OK", route.content_type, route.body.clone()),
-        None => ("HTTP/1.1 404 Not Found", "text/plain", "not found".to_string()),
+        None => (
+            "HTTP/1.1 404 Not Found",
+            "text/plain",
+            "not found".to_string(),
+        ),
     };
 
     let response = format!(

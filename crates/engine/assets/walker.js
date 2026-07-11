@@ -110,6 +110,12 @@
   }
 
   function walkIframe(el, depth) {
+    // Every iframe gets a ref, same-origin or not -- a cross-origin one may
+    // still be backed by an attachable OOPIF target, and the Rust-side
+    // correlation step (cross-origin-oopif spec) needs a ref on THIS node
+    // to find it and splice the OOPIF's own content in as its children.
+    var ref = refFor(el);
+
     var doc = null;
     try {
       doc = el.contentDocument;
@@ -121,16 +127,17 @@
       return {
         tag: 'iframe',
         role: 'iframe',
+        ref: ref,
         name: 'cross-origin iframe (not inspectable): ' + (el.getAttribute('src') || ''),
         children: [],
       };
     }
     if (!doc.body) {
-      return { tag: 'iframe', role: 'iframe', name: 'iframe not yet loaded', children: [] };
+      return { tag: 'iframe', role: 'iframe', ref: ref, name: 'iframe not yet loaded', children: [] };
     }
 
     var child = walk(doc.body, depth + 1);
-    var out = { tag: 'iframe', role: 'iframe', children: child ? [child] : [] };
+    var out = { tag: 'iframe', role: 'iframe', ref: ref, children: child ? [child] : [] };
     var title = el.getAttribute('title');
     if (title) out.name = title;
     return out;
