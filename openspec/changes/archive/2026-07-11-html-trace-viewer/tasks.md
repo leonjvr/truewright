@@ -28,5 +28,5 @@
 ## 6. Wrap-up
 - [x] 6.1 Update README with `aib trace view`/`browser_render_trace` usage
 - [x] 6.2 Update PROPOSAL.md's Phase 5 roadmap
-- [ ] 6.3 `openspec archive html-trace-viewer -y`, fix any "Purpose: TBD" placeholder in the synced spec
-- [ ] 6.4 Three commits: Propose, Implement, Sync-specs-and-archive
+- [x] 6.3 `openspec archive html-trace-viewer -y`, fix any "Purpose: TBD" placeholder in the synced spec
+- [x] 6.4 Three commits: Propose, Implement, Sync-specs-and-archive
