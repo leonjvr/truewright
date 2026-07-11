@@ -1,0 +1,22 @@
+name: Chrome Beta
+
+# Runs the full test suite against Google Chrome Beta, not whatever channel
+# happens to be on the runner, to catch CDP protocol drift before it reaches
+# Stable. See openspec/changes/archive/*-weekly-chrome-beta-ci/design.md --
+# this workflow's actual execution on GitHub's runners has not been
+# observed, since this repository has no git remote configured yet.
+"on":
+  schedule:
+    - cron: "0 6 * * 1" # every Monday at 06:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  test-against-chrome-beta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build and run the suite against Chrome Beta
+        run: bash docker/run-tests-chrome-beta.sh

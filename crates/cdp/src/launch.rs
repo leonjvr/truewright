@@ -64,6 +64,21 @@ pub enum BrowserPreference {
 // for marginal benefit at this size, so the large-error lint is accepted here.
 #[allow(clippy::result_large_err)]
 pub fn discover_browsers() -> Result<Vec<DiscoveredBrowser>> {
+    if let Some(path) = std::env::var_os("AIB_CHROME_PATH") {
+        let path = PathBuf::from(path);
+        return if path.is_file() {
+            Ok(vec![DiscoveredBrowser {
+                kind: BrowserKind::Chrome,
+                path,
+                is_headless_shell: false,
+            }])
+        } else {
+            Err(CdpError::NoBrowserFound {
+                checked: format!("AIB_CHROME_PATH={}", path.display()),
+            })
+        };
+    }
+
     let mut found = Vec::new();
     let mut checked = Vec::new();
 
@@ -86,12 +101,19 @@ pub fn discover_browsers() -> Result<Vec<DiscoveredBrowser>> {
 }
 
 /// Picks the binary for a headless session (browser-attach spec: "Managed
-/// chrome-headless-shell for headless runs"): cached shell → downloaded
-/// shell → installed browser, unless the caller opted out with
-/// [`BrowserPreference::Installed`]. Failures on the shell path degrade to
-/// the installed browser with a warning, never a hard error.
+/// chrome-headless-shell for headless runs"): `AIB_CHROME_PATH` override (if
+/// set) → cached shell → downloaded shell → installed browser, unless the
+/// caller opted out with [`BrowserPreference::Installed`]. Failures on the
+/// shell path degrade to the installed browser with a warning, never a hard
+/// error. The override takes priority over the managed shell too -- forcing
+/// a specific binary (e.g. Chrome Beta in CI) would otherwise be silently
+/// ignored by every headless launch, which is the common case for the test
+/// suite this override exists to redirect.
 #[allow(clippy::result_large_err)]
 pub async fn resolve_headless_browser(pref: BrowserPreference) -> Result<DiscoveredBrowser> {
+    if std::env::var_os("AIB_CHROME_PATH").is_some() {
+        return discover_browsers().map(|mut found| found.remove(0));
+    }
     if pref == BrowserPreference::Auto {
         if let Some(shell) = crate::download::cached_shell() {
             return Ok(shell);
@@ -424,6 +446,48 @@ fn kill_process_group(pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // AIB_CHROME_PATH is process-global env state, and Rust's default test
+    // harness runs #[test]/#[tokio::test] functions concurrently on separate
+    // threads within the same process -- any second test mutating this same
+    // var races this one. All AIB_CHROME_PATH assertions live in this single
+    // test function so there is nothing to race with, rather than relying on
+    // test-runner isolation that doesn't actually exist here.
+    #[tokio::test]
+    async fn aib_chrome_path_overrides_discovery_and_the_managed_headless_shell() {
+        let real_chrome = discover_browsers()
+            .ok()
+            .map(|found| found[0].path.clone());
+        let Some(real_chrome) = real_chrome else {
+            eprintln!(
+                "skipping aib_chrome_path_overrides_discovery_and_the_managed_headless_shell: no installed browser found"
+            );
+            return;
+        };
+
+        std::env::set_var("AIB_CHROME_PATH", &real_chrome);
+        let result = discover_browsers();
+        let found = result.expect("override should discover successfully");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, real_chrome);
+        assert_eq!(found[0].kind, BrowserKind::Chrome);
+
+        let result = resolve_headless_browser(BrowserPreference::Auto).await;
+        let resolved = result.expect("override should resolve successfully");
+        assert_eq!(
+            resolved.path, real_chrome,
+            "AIB_CHROME_PATH must win over the managed chrome-headless-shell path"
+        );
+        std::env::remove_var("AIB_CHROME_PATH");
+
+        std::env::set_var("AIB_CHROME_PATH", r"C:\definitely\not\a\real\browser.exe");
+        let result = discover_browsers();
+        std::env::remove_var("AIB_CHROME_PATH");
+        assert!(
+            result.is_err(),
+            "a nonexistent AIB_CHROME_PATH must error, not silently fall back"
+        );
+    }
 
     #[test]
     fn well_known_paths_are_kind_specific() {

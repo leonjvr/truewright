@@ -1,0 +1,26 @@
+# Same disposable-container contract as docker/Dockerfile, but installs
+# Google Chrome Beta from Google's own apt repo instead of Debian's
+# `chromium` package, so the suite runs against a channel ahead of Stable --
+# see openspec/changes/archive/*-weekly-chrome-beta-ci/design.md.
+FROM rust:slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    gnupg \
+    fonts-liberation \
+    ca-certificates \
+    build-essential \
+    pkg-config \
+    && curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+        | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+        > /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        google-chrome-beta \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV AIB_CHROME_PATH=/usr/bin/google-chrome-beta
+
+WORKDIR /app
+
+CMD ["cargo", "test", "--workspace"]
