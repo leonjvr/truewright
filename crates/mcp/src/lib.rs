@@ -104,11 +104,19 @@ pub struct TrainStartRequest {
     pub name: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct NetworkNameRequest {
+    #[schemars(description = "Name to save/load the network cassette under")]
+    pub name: String,
+}
+
 #[derive(Clone)]
 pub struct AibTools {
     session: Arc<Mutex<Option<engine::Session>>>,
     recording: Arc<Mutex<Option<engine::Recording>>>,
     training: Arc<Mutex<Option<engine::Training>>>,
+    network_recording: Arc<Mutex<Option<engine::NetworkRecording>>>,
+    network_replay: Arc<Mutex<Option<engine::NetworkReplay>>>,
     headless: bool,
     browser_pref: cdp::launch::BrowserPreference,
     // Read by the `#[tool_handler]`-generated `ServerHandler` impl to route
@@ -128,6 +136,8 @@ impl AibTools {
             session: Arc::new(Mutex::new(None)),
             recording: Arc::new(Mutex::new(None)),
             training: Arc::new(Mutex::new(None)),
+            network_recording: Arc::new(Mutex::new(None)),
+            network_replay: Arc::new(Mutex::new(None)),
             headless,
             browser_pref,
             tool_router: Self::tool_router(),
@@ -390,6 +400,117 @@ impl AibTools {
         ))]))
     }
 
+    #[tool(
+        description = "Start passively recording real network traffic to a named cassette. Fails if a recording or replay is already active."
+    )]
+    async fn browser_network_record_start(
+        &self,
+        Parameters(NetworkNameRequest { name }): Parameters<NetworkNameRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_session().await?;
+
+        let mut network_recording_guard = self.network_recording.lock().await;
+        if network_recording_guard.is_some() {
+            return Err(McpError::invalid_params(
+                "a network recording is already in progress; call browser_network_record_stop first",
+                None,
+            ));
+        }
+        if self.network_replay.lock().await.is_some() {
+            return Err(McpError::invalid_params(
+                "a network replay is active; call browser_network_replay_stop first",
+                None,
+            ));
+        }
+
+        let session_guard = self.session.lock().await;
+        let session = session_guard.as_ref().ok_or_else(no_session_error)?;
+
+        let network_recording = session
+            .network_record_start(&name)
+            .await
+            .map_err(map_engine_err)?;
+        *network_recording_guard = Some(network_recording);
+
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "network recording started for {name:?}. Call browser_network_record_stop when done \
+             (auto-stops after 5 minutes)."
+        ))]))
+    }
+
+    #[tool(description = "Stop the active network recording and save the cassette")]
+    async fn browser_network_record_stop(&self) -> Result<CallToolResult, McpError> {
+        let network_recording = self
+            .network_recording
+            .lock()
+            .await
+            .take()
+            .ok_or_else(|| McpError::invalid_params("no network recording is in progress", None))?;
+
+        let summary = network_recording.stop().await.map_err(map_engine_err)?;
+
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "cassette {:?} saved: {} request(s) recorded to {}",
+            summary.name,
+            summary.entry_count,
+            summary.path.display()
+        ))]))
+    }
+
+    #[tool(
+        description = "Start replaying network traffic from a named cassette: every request is intercepted and fulfilled from the recording, with no live-network dependency. A request with no matching cassette entry fails loudly. Fails if a recording or replay is already active, or if the cassette doesn't exist."
+    )]
+    async fn browser_network_replay_start(
+        &self,
+        Parameters(NetworkNameRequest { name }): Parameters<NetworkNameRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_session().await?;
+
+        let mut network_replay_guard = self.network_replay.lock().await;
+        if network_replay_guard.is_some() {
+            return Err(McpError::invalid_params(
+                "a network replay is already in progress; call browser_network_replay_stop first",
+                None,
+            ));
+        }
+        if self.network_recording.lock().await.is_some() {
+            return Err(McpError::invalid_params(
+                "a network recording is active; call browser_network_record_stop first",
+                None,
+            ));
+        }
+
+        let session_guard = self.session.lock().await;
+        let session = session_guard.as_ref().ok_or_else(no_session_error)?;
+
+        let network_replay = session
+            .network_replay_start(&name)
+            .await
+            .map_err(map_engine_err)?;
+        *network_replay_guard = Some(network_replay);
+
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "network replay started from cassette {name:?}. Call browser_network_replay_stop to \
+             return to normal network behavior."
+        ))]))
+    }
+
+    #[tool(description = "Stop network replay and return to normal (live) network behavior")]
+    async fn browser_network_replay_stop(&self) -> Result<CallToolResult, McpError> {
+        let network_replay = self
+            .network_replay
+            .lock()
+            .await
+            .take()
+            .ok_or_else(|| McpError::invalid_params("no network replay is in progress", None))?;
+
+        network_replay.stop().await.map_err(map_engine_err)?;
+
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            "network replay stopped; requests now reach the live network again.",
+        )]))
+    }
+
     #[tool(description = "Close the browser session")]
     async fn browser_close(&self) -> Result<CallToolResult, McpError> {
         let mut guard = self.session.lock().await;
@@ -417,12 +538,14 @@ impl ServerHandler for AibTools {
                  browser_type(ref, text, submit?, human_like?, persona?, trained_profile?, seed?), \
                  browser_press(key), browser_wait_for(text, timeout_ms?), browser_screenshot(), \
                  browser_record_start(max_duration_ms?, quality?), browser_record_stop(), \
-                 browser_train_start(name), browser_train_stop(), browser_close(). Refs come from \
-                 the snapshot text, e.g. `[e6]` -> ref \"e6\". Actions do not auto-return a new \
-                 snapshot; call browser_snapshot again after an action that may have changed the \
-                 page. Use browser_record_start/stop to capture a short GIF of moving/animated \
-                 parts instead of a single screenshot. Set human_like: true on \
-                 browser_click/browser_type to move the mouse along a curved path and type \
+                 browser_train_start(name), browser_train_stop(), \
+                 browser_network_record_start(name), browser_network_record_stop(), \
+                 browser_network_replay_start(name), browser_network_replay_stop(), \
+                 browser_close(). Refs come from the snapshot text, e.g. `[e6]` -> ref \"e6\". \
+                 Actions do not auto-return a new snapshot; call browser_snapshot again after an \
+                 action that may have changed the page. Use browser_record_start/stop to capture a \
+                 short GIF of moving/animated parts instead of a single screenshot. Set human_like: \
+                 true on browser_click/browser_type to move the mouse along a curved path and type \
                  character-by-character with human-like pauses instead of instant dispatch, e.g. \
                  for testing an application's bot-detection; persona is one of careful/average/fast \
                  (default average), and seed reproduces the exact same motion/timing on a later \
@@ -430,7 +553,12 @@ impl ServerHandler for AibTools {
                  real human physically using the browser (call browser_train_stop when done), then \
                  pass trained_profile: name (instead of persona) on browser_click/browser_type to \
                  replay that human's fitted timing with fresh variability each call -- requesting a \
-                 name that was never trained fails with a clear error rather than a silent fallback."
+                 name that was never trained fails with a clear error rather than a silent fallback. \
+                 Use browser_network_record_start(name)/stop to capture real network traffic to a \
+                 named cassette, then browser_network_replay_start(name)/stop to replay a later run \
+                 entirely from that cassette with no live-backend dependency -- a request with no \
+                 matching recorded response fails loudly rather than silently reaching the real \
+                 network, so an incomplete recording is obvious immediately."
                     .to_string(),
             )
     }
@@ -469,12 +597,10 @@ fn seed_suffix(seed: Option<u64>) -> String {
 fn map_engine_err(e: engine::EngineError) -> McpError {
     use engine::EngineError::*;
     match e {
-        StaleRef(_) | UnknownKey(_) | UnknownPersona(_) | UntrainedProfile(_) | AmbiguousPersona => {
-            McpError::invalid_params(e.to_string(), None)
-        }
-        ActionTimeout { .. } | WaitTimeout { .. } | Cdp(_) | Serde(_) | Recording(_) | Training(_) => {
-            McpError::internal_error(e.to_string(), None)
-        }
+        StaleRef(_) | UnknownKey(_) | UnknownPersona(_) | UntrainedProfile(_) | AmbiguousPersona
+        | UnknownCassette(_) => McpError::invalid_params(e.to_string(), None),
+        ActionTimeout { .. } | WaitTimeout { .. } | Cdp(_) | Serde(_) | Recording(_) | Training(_)
+        | Network(_) => McpError::internal_error(e.to_string(), None),
     }
 }
 

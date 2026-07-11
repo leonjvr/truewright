@@ -8,6 +8,7 @@
 mod error;
 mod keys;
 pub mod motion;
+pub mod network;
 pub mod recording;
 mod session;
 mod snapshot;
@@ -15,5 +16,6 @@ mod snapshot;
 pub use error::{EngineError, Result};
 pub use motion::profile_store::StoredProfile;
 pub use motion::{Persona, Training};
+pub use network::{Cassette, NetworkRecording, NetworkRecordingSummary, NetworkReplay};
 pub use recording::{Recording, RecordingOptions, RecordingOutput};
 pub use session::{HumanLike, Session};

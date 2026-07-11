@@ -5,7 +5,7 @@
 use crate::connection::Connection;
 use crate::error::{CdpError, Result};
 use crate::launch::{self, BrowserKind, DiscoveredBrowser, LaunchedBrowser};
-use crate::protocol::{browser, input, page, runtime, target};
+use crate::protocol::{browser, fetch, input, network, page, runtime, target};
 use crate::session::{CdpEvent, EventItem, EventStream, Session};
 use base64::Engine;
 use std::time::Duration;
@@ -273,6 +273,80 @@ impl Page {
         self.session
             .execute::<runtime::RemoveBinding>(runtime::RemoveBindingParams {
                 name: name.to_string(),
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Starts passive network observation: `requestWillBeSent`/
+    /// `responseReceived`/`loadingFinished` events start flowing on this
+    /// page's session (network-mocking spec: "Passive network recording").
+    pub async fn enable_network_capture(&self) -> Result<()> {
+        self.session
+            .execute::<network::Enable>(Default::default())
+            .await?;
+        Ok(())
+    }
+
+    /// Fetches a completed request's response body. Only valid after that
+    /// request's `loadingFinished` event has fired.
+    pub async fn get_response_body(&self, request_id: &str) -> Result<(String, bool)> {
+        let resp = self
+            .session
+            .execute::<network::GetResponseBody>(network::GetResponseBodyParams {
+                request_id: request_id.to_string(),
+            })
+            .await?;
+        Ok((resp.body, resp.base64_encoded))
+    }
+
+    /// Starts intercepting every request: each one pauses (surfaced as a
+    /// `RequestPaused` event) until `fulfill_request`/`fail_request` is
+    /// called (network-mocking spec: "Replay from a cassette").
+    pub async fn enable_request_interception(&self) -> Result<()> {
+        self.session
+            .execute::<fetch::Enable>(Default::default())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn disable_request_interception(&self) -> Result<()> {
+        self.session
+            .execute::<fetch::Disable>(Default::default())
+            .await?;
+        Ok(())
+    }
+
+    /// Resolves a paused request with a substituted response.
+    /// `body_base64` is the base64-encoded response body.
+    pub async fn fulfill_request(
+        &self,
+        request_id: &str,
+        status: i64,
+        headers: Vec<(String, String)>,
+        body_base64: Option<String>,
+    ) -> Result<()> {
+        self.session
+            .execute::<fetch::FulfillRequest>(fetch::FulfillRequestParams {
+                request_id: request_id.to_string(),
+                response_code: status,
+                response_headers: headers
+                    .into_iter()
+                    .map(|(name, value)| fetch::HeaderEntry { name, value })
+                    .collect(),
+                body: body_base64,
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Resolves a paused request as a network failure (network-mocking
+    /// spec: "Unmatched replay requests fail loudly").
+    pub async fn fail_request(&self, request_id: &str) -> Result<()> {
+        self.session
+            .execute::<fetch::FailRequest>(fetch::FailRequestParams {
+                request_id: request_id.to_string(),
+                error_reason: "Failed".to_string(),
             })
             .await?;
         Ok(())

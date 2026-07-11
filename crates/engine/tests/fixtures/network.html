@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Network Fixture</title></head>
+<body>
+  <main>
+    <h1>Network Fixture</h1>
+    <button id="fetch-btn" type="button">Fetch greeting</button>
+    <button id="fetch-missing-btn" type="button">Fetch missing</button>
+    <p id="result">(not fetched yet)</p>
+  </main>
+  <script>
+    function doFetch(path) {
+      fetch(path)
+        .then(function (r) {
+          if (!r.ok) { throw new Error('status ' + r.status); }
+          return r.json();
+        })
+        .then(function (data) {
+          document.getElementById('result').textContent = data.message;
+        })
+        .catch(function (err) {
+          document.getElementById('result').textContent = 'ERROR: ' + err;
+        });
+    }
+    document.getElementById('fetch-btn').addEventListener('click', function () {
+      doFetch('/api/greeting');
+    });
+    document.getElementById('fetch-missing-btn').addEventListener('click', function () {
+      doFetch('/api/missing');
+    });
+  </script>
+</body>
+</html>

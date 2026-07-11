@@ -147,6 +147,21 @@ impl Session {
         }
     }
 
+    /// Starts passively recording network traffic to a named cassette
+    /// (network-mocking spec: "Passive network recording to a named
+    /// cassette"). `NetworkRecording::stop` finishes and persists it.
+    pub async fn network_record_start(&self, name: &str) -> Result<crate::network::NetworkRecording> {
+        crate::network::NetworkRecording::start(&self.page, name).await
+    }
+
+    /// Starts intercepting every request and fulfilling it from the named
+    /// cassette (network-mocking spec: "Replay from a cassette with no
+    /// live-network dependency"). `NetworkReplay::stop` disables
+    /// interception.
+    pub async fn network_replay_start(&self, name: &str) -> Result<crate::network::NetworkReplay> {
+        crate::network::NetworkReplay::start(&self.page, name).await
+    }
+
     pub async fn navigate(&self, url: &str) -> Result<String> {
         self.page.navigate_and_wait(url, NAVIGATE_TIMEOUT).await?;
         self.snapshot().await

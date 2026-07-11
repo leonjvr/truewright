@@ -43,6 +43,12 @@ pub enum EngineError {
 
     #[error("recording failed: {0}")]
     Recording(String),
+
+    #[error("network mocking failed: {0}")]
+    Network(String),
+
+    #[error("no cassette named {0:?}; run browser_network_record_start/browser_network_record_stop against it first")]
+    UnknownCassette(String),
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;

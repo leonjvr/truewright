@@ -14,11 +14,12 @@ An LLM-first browser-testing engine: a single Rust binary that drives your insta
 - **Screencast capture — done.** `browser_record_start`/`browser_record_stop` record the page via CDP's `Page.startScreencast`, capped at 30s, and assemble a small animated GIF (JPEG frame sequence + timestamped manifest also saved to disk) — for verifying moving parts, not just static screenshots. GIF only in this phase; no WebM/MP4 (see below).
 - **Human motion (synthetic) — done.** `browser_click`/`browser_type` take an optional `human_like` mode: the mouse follows a seeded, Fitts's-law-timed Bezier path (with jitter and occasional overshoot+correction) from wherever the cursor last was instead of teleporting, and typing dispatches one character at a time with persona-shaped, non-uniform pauses instead of a bulk insert. Three built-in presets (`careful`/`average`/`fast`); an explicit `seed` reproduces the exact same motion and timing on a later call, and the response always reports the seed actually used.
 - **Human motion (trained) — done.** `browser_train_start(name)`/`browser_train_stop()` capture a real human's mouse/keyboard input (genuinely trusted DOM events, not this engine's own dispatch — see below) while they physically use the browser, fit a `Persona` from it (Fitts's-law constants, jitter, overshoot probability, typing cadence), and save it by name. `browser_click`/`browser_type`'s `trained_profile` param replays that persona through the exact same synthesis/dispatch path the synthetic presets use, so omitting `seed` already gives fresh, non-identical motion/timing on every call — never a literal replay of the recorded demonstration. Requesting a `trained_profile` name that was never trained fails with a clear error, never a silent fallback to a synthetic persona.
-- **Next:** true OS-level input mode (Phase 4) and determinism/mocking (Phase 3) — see PROPOSAL.md's roadmap.
+- **Network mocking (record/replay) — done.** `browser_network_record_start(name)`/`browser_network_record_stop()` passively capture real request/response pairs to a named cassette; `browser_network_replay_start(name)`/`browser_network_replay_stop()` intercept every request and fulfill it from the cassette instead, so a later test run has zero live-backend dependency. Verified end-to-end: recorded against a real local server, replayed with that server shut down, rendered identically. A request with no matching cassette entry fails as a network error rather than silently reaching the real network.
+- **Next:** true OS-level input mode (Phase 4) and the rest of Phase 3's determinism primitives (init scripts, virtual clock, seeded randomness, traces, assertions, YAML runner) — see PROPOSAL.md's roadmap.
 
 ## MCP server
 
-Configure `aib mcp` as a stdio MCP server in an agent host (e.g. Claude Code, Claude Desktop). It lazily launches a browser on the first tool call and exposes: `browser_navigate(url)`, `browser_snapshot()`, `browser_click(ref, human_like?, persona?, trained_profile?, seed?)`, `browser_type(ref, text, submit?, human_like?, persona?, trained_profile?, seed?)`, `browser_press(key)`, `browser_wait_for(text, timeout_ms?)`, `browser_screenshot()`, `browser_record_start(max_duration_ms?, quality?)`, `browser_record_stop()`, `browser_train_start(name)`, `browser_train_stop()`, `browser_close()`. Refs come from the snapshot text (e.g. `[e6]`).
+Configure `aib mcp` as a stdio MCP server in an agent host (e.g. Claude Code, Claude Desktop). It lazily launches a browser on the first tool call and exposes: `browser_navigate(url)`, `browser_snapshot()`, `browser_click(ref, human_like?, persona?, trained_profile?, seed?)`, `browser_type(ref, text, submit?, human_like?, persona?, trained_profile?, seed?)`, `browser_press(key)`, `browser_wait_for(text, timeout_ms?)`, `browser_screenshot()`, `browser_record_start(max_duration_ms?, quality?)`, `browser_record_stop()`, `browser_train_start(name)`, `browser_train_stop()`, `browser_network_record_start(name)`, `browser_network_record_stop()`, `browser_network_replay_start(name)`, `browser_network_replay_stop()`, `browser_close()`. Refs come from the snapshot text (e.g. `[e6]`).
 
 `human_like` (default `false`) switches `browser_click`/`browser_type` from instant dispatch to synthesized human-like motion: a curved, timed mouse path (`browser_click`) plus per-character typing pauses (`browser_type`). Setting `persona` or `trained_profile` implies `human_like` even if left at its default. `seed` fixes the RNG for reproducible motion/timing across calls; omit it for a fresh random seed each time. The result text always reports the seed used, e.g. `clicked e6 (human-like, seed=1234567890)`.
 
@@ -38,6 +39,20 @@ browser_click(ref: "e3", trained_profile: "nobody")               # error: "no t
 ```
 
 Only genuinely trusted (`event.isTrusted`) input is captured, filtered by an additional suppression flag this engine's own click/type/press dispatch sets around itself while training is active — CDP-dispatched input is itself `isTrusted` in Chrome, so `isTrusted` alone can't tell this engine's own synthetic dispatch apart from the human physically using the window. One training session at a time; it auto-stops after 5 minutes if `browser_train_stop` is never called. Trained profiles persist under `<data-dir>/aib/profiles/human/<name>.json` and are reused across sessions.
+
+**Network mocking (record/replay):**
+
+```
+browser_network_record_start(name: "checkout-flow")   # drive the app normally; real requests/responses are captured
+...  browser_navigate/click/type against the real backend ...
+browser_network_record_stop()                         # saves the cassette; reports how many requests were recorded
+
+browser_network_replay_start(name: "checkout-flow")    # every request now intercepted, no live network involved
+...  replay the same navigate/click/type sequence -- identical responses, live backend can be down ...
+browser_network_replay_stop()                          # back to normal (live) network behavior
+```
+
+Recording is passive (the `Network` domain observes real traffic); replay actively intercepts every request (the `Fetch` domain) and fulfills it from the cassette, matched by `(method, URL)` and served in original recorded order for repeated calls to the same endpoint (handles polling/pagination without needing to match request bodies). A request during replay with no matching cassette entry fails as a network error — never a silent passthrough to the live network, so an incomplete recording is obvious immediately instead of quietly flaky. Record and replay are mutually exclusive with each other, one at a time; cassettes persist under `<data-dir>/aib/network/<name>.json`.
 
 ```
 aib mcp                        # headless, managed chrome-headless-shell (auto-downloaded/cached)
