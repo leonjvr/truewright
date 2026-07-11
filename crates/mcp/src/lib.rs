@@ -558,6 +558,19 @@ impl AibTools {
         Ok(CallToolResult::success(vec![ContentBlock::text(yaml)]))
     }
 
+    #[tool(
+        description = "Render a saved trace (from browser_console_start/stop) as a self-contained HTML file, and return its path. Doesn't return the HTML itself -- open the path to view it."
+    )]
+    async fn browser_render_trace(
+        &self,
+        Parameters(ExportYamlRequest { name }): Parameters<ExportYamlRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let path = engine::render_trace_html(&name).map_err(map_engine_err)?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            path.display().to_string(),
+        )]))
+    }
+
     #[tool(description = "Capture a screenshot of the current page")]
     async fn browser_screenshot(&self) -> Result<CallToolResult, McpError> {
         self.ensure_session().await?;
@@ -877,6 +890,7 @@ impl ServerHandler for AibTools {
                  browser_console_start(name), browser_console_stop(), \
                  browser_assert(text, present?), \
                  browser_run_yaml(source), browser_export_yaml(name), \
+                 browser_render_trace(name), \
                  browser_list_pages(), browser_switch_page(page_id), \
                  browser_close(). Refs come from the snapshot text, e.g. `[e6]` -> ref \"e6\". \
                  Actions do not auto-return a new snapshot; call browser_snapshot again after an \
@@ -919,7 +933,11 @@ impl ServerHandler for AibTools {
                  `- click: e6` or `- type: {ref: e6, text: \"...\"}`) against the current session, \
                  stopping at the first failing step; browser_export_yaml(name) turns an already-saved \
                  trace's actions back into a runnable script of that same format -- record a flow once \
-                 with browser_console_start/stop, then export and re-run it as a repeatable test. A \
+                 with browser_console_start/stop, then export and re-run it as a repeatable test. \
+                 browser_render_trace(name) renders that same saved trace as a self-contained HTML file \
+                 (returns its path, not the HTML itself) -- console/exception/action entries in \
+                 chronological order, plus any browser_screenshot calls taken while the trace was \
+                 active, shown inline. A \
                  popup or new tab opened as a side effect of an action (e.g. \"Sign in with Google\") \
                  attaches automatically but does NOT become active on its own -- call \
                  browser_list_pages() to see it (marked with its page_id) and browser_switch_page(page_id) \

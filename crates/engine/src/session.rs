@@ -408,8 +408,8 @@ impl Session {
     /// spec: "Action entries interleaved into the active trace"). A no-op
     /// when no trace is active.
     async fn log_action(&self, text: String) {
-        if let Some(sink) = self.action_trace_sink.lock().await.as_ref() {
-            sink.lock().await.push(crate::console::TraceEntry::Action {
+        if let Some(active) = self.action_trace_sink.lock().await.as_ref() {
+            active.entries.lock().await.push(crate::console::TraceEntry::Action {
                 text,
                 timestamp_ms: crate::console::now_ms(),
             });
@@ -682,7 +682,21 @@ impl Session {
     }
 
     pub async fn screenshot(&self) -> Result<Vec<u8>> {
-        Ok(self.active_page().await.screenshot().await?)
+        let bytes = self.active_page().await.screenshot().await?;
+
+        // Best-effort: a screenshot-tracing hiccup must never fail the
+        // screenshot call itself (html-trace-viewer spec: "Screenshot
+        // logging never fails the screenshot call").
+        if let Some(active) = self.action_trace_sink.lock().await.as_ref() {
+            if let Ok(path) = crate::console::save_screenshot(&active.name, &bytes) {
+                active.entries.lock().await.push(crate::console::TraceEntry::Screenshot {
+                    path: path.display().to_string(),
+                    timestamp_ms: crate::console::now_ms(),
+                });
+            }
+        }
+
+        Ok(bytes)
     }
 
     /// Parses and executes a YAML script's steps in order against this

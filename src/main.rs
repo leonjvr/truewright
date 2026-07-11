@@ -73,6 +73,21 @@ enum Command {
         #[arg(long)]
         token: Option<String>,
     },
+    /// Render or inspect saved traces (html-trace-viewer spec).
+    Trace {
+        #[command(subcommand)]
+        action: TraceCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum TraceCommand {
+    /// Render a saved trace (from browser_console_start/stop) as a
+    /// self-contained HTML file, written alongside the trace itself.
+    View {
+        /// Name of a trace saved via browser_console_start/stop.
+        name: String,
+    },
 }
 
 #[tokio::main]
@@ -111,5 +126,17 @@ async fn main() -> std::process::ExitCode {
                 mcp::run(!headed, browser.into()).await
             }
         }
+        Command::Trace { action } => match action {
+            TraceCommand::View { name } => match engine::render_trace_html(&name) {
+                Ok(path) => {
+                    println!("{}", path.display());
+                    std::process::ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("failed to render trace {name:?}: {e}");
+                    std::process::ExitCode::FAILURE
+                }
+            },
+        },
     }
 }

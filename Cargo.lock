@@ -25,6 +25,7 @@ dependencies = [
  "axum",
  "cdp",
  "clap",
+ "engine",
  "mcp-server",
  "rand 0.8.6",
  "reqwest",

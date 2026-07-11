@@ -50,6 +50,7 @@ tracing-subscriber.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 cdp = { path = "crates/cdp" }
+engine = { path = "crates/engine" }
 mcp-server = { path = "crates/mcp" }
 rmcp = { workspace = true, features = ["transport-streamable-http-server"] }
 sysinfo.workspace = true

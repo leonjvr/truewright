@@ -13,6 +13,7 @@ pub mod network;
 pub mod recording;
 mod session;
 mod snapshot;
+mod trace_view;
 mod yaml_runner;
 
 pub use console::{ConsoleCapture, ConsoleCaptureSummary, TraceEntry};
@@ -22,4 +23,5 @@ pub use motion::{Persona, Training};
 pub use network::{Cassette, NetworkRecording, NetworkRecordingSummary, NetworkReplay};
 pub use recording::{Recording, RecordingOptions, RecordingOutput};
 pub use session::{HumanLike, PageInfo, Session};
+pub use trace_view::{render_html, render_trace_html};
 pub use yaml_runner::{RunSummary, Step};

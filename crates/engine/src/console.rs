@@ -33,14 +33,29 @@ pub enum TraceEntry {
         text: String,
         timestamp_ms: f64,
     },
+    /// A `browser_screenshot` call made while this trace was active
+    /// (html-trace-viewer spec: "Screenshots captured into the active
+    /// trace"). `path` points at the saved PNG on disk -- kept out of the
+    /// JSONL trace itself (which stays lightweight/greppable) and only
+    /// read back in when rendering to HTML.
+    Screenshot {
+        path: String,
+        timestamp_ms: f64,
+    },
 }
 
-/// A reference to the currently-active trace's shared entry buffer, or
-/// `None` if no trace is active (action-trace spec: "Action entries
-/// interleaved into the active trace"). `Session` holds one of these and
-/// checks it before appending an action entry, so tracing costs nothing
-/// when inactive.
-pub type ActionTraceSink = Arc<Mutex<Option<Arc<Mutex<Vec<TraceEntry>>>>>>;
+/// The currently-active trace: its name (so callers who need to write
+/// trace-adjacent files, like screenshots, know where) plus its shared
+/// entry buffer. `Session` holds an `Option` of this and checks it before
+/// appending an entry, so tracing costs nothing when inactive
+/// (action-trace spec: "Action entries interleaved into the active
+/// trace").
+pub struct ActiveTrace {
+    pub name: String,
+    pub entries: Arc<Mutex<Vec<TraceEntry>>>,
+}
+
+pub type ActionTraceSink = Arc<Mutex<Option<ActiveTrace>>>;
 
 pub struct ConsoleCaptureSummary {
     pub name: String,
@@ -62,7 +77,10 @@ pub struct ConsoleCapture {
 impl ConsoleCapture {
     pub(crate) async fn start(page: &Page, name: &str, action_sink: ActionTraceSink) -> Result<Self> {
         let entries = Arc::new(Mutex::new(Vec::new()));
-        *action_sink.lock().await = Some(entries.clone());
+        *action_sink.lock().await = Some(ActiveTrace {
+            name: name.to_string(),
+            entries: entries.clone(),
+        });
 
         let (stop_tx, stop_rx) = oneshot::channel();
         let collector = tokio::spawn(collect_console(
@@ -195,9 +213,33 @@ fn traces_dir() -> Result<PathBuf> {
     Ok(cdp::launch::profile_base_dir()?.join("aib").join("traces"))
 }
 
+/// Saves a `browser_screenshot` capture taken while `name`'s trace is
+/// active, returning the path to store in a `Screenshot` entry
+/// (html-trace-viewer spec). Kept out of the JSONL trace itself -- only
+/// read back in when rendering to HTML.
+#[allow(clippy::result_large_err)]
+pub(crate) fn save_screenshot(name: &str, bytes: &[u8]) -> Result<PathBuf> {
+    let dir = traces_dir()?.join(format!("{name}-screenshots"));
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| EngineError::Console(format!("failed to create screenshots dir: {e}")))?;
+
+    let path = dir.join(format!("{}.png", now_ms() as u64));
+    std::fs::write(&path, bytes)
+        .map_err(|e| EngineError::Console(format!("failed to write {}: {e}", path.display())))?;
+
+    Ok(path)
+}
+
 #[allow(clippy::result_large_err)]
 fn trace_path(name: &str) -> Result<PathBuf> {
     Ok(traces_dir()?.join(format!("{name}.jsonl")))
+}
+
+/// Where `render_trace_html` writes a trace's rendered HTML -- alongside
+/// the `.jsonl` trace itself (html-trace-viewer spec).
+#[allow(clippy::result_large_err)]
+pub(crate) fn trace_html_path(name: &str) -> Result<PathBuf> {
+    Ok(traces_dir()?.join(format!("{name}.html")))
 }
 
 // EngineError is kept as one flat enum (matches cdp::CdpError's rationale);
