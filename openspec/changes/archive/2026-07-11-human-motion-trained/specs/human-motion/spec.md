@@ -1,15 +1,15 @@
 ## ADDED Requirements
 
 ### Requirement: Training capture from real trusted input
-The engine SHALL support an explicit training mode that captures genuinely trusted (`event.isTrusted === true`) `mousemove`, `mousedown`, `mouseup`, `keydown`, and `keyup` events with high-resolution timestamps from a page the user is actively interacting with, started and stopped by name.
+The engine SHALL support an explicit training mode that captures `mousemove`, `mousedown`, `mouseup`, `keydown`, and `keyup` events with high-resolution timestamps from a page the user is actively interacting with, started and stopped by name. Events are filtered by `event.isTrusted === true` (excluding a page's own untrusted, JS-dispatched events) AND by an explicit suppression flag that this engine's own click/type/press dispatch sets for the duration of each of its actions while training is active — CDP-dispatched `Input.dispatch*Event` calls are themselves `isTrusted` in Chrome, so `isTrusted` alone cannot distinguish this engine's own synthetic input from a real human's; the suppression flag is the mechanism that actually does.
 
 #### Scenario: Training captures a real interaction
 - **WHEN** training is started, a human performs a click and types text on the page, and training is stopped
 - **THEN** the engine has recorded timestamped samples of that interaction, not synthetic dispatch events
 
 #### Scenario: Synthetic dispatch is not captured as training data
-- **WHEN** training is active and this engine's own instant or human-like dispatch fires a synthetic input event
-- **THEN** that event is not included in the captured samples
+- **WHEN** training is active and this engine's own click/type/press dispatch (instant or human-like) fires a synthetic input event
+- **THEN** that event is not included in the captured samples, because the suppression flag was set for the duration of that dispatch
 
 ### Requirement: Persona fitted from captured samples
 On `browser_train_stop`, the engine SHALL fit a `Persona` (Fitts's-law constants, jitter, overshoot probability, typing-cadence mean/stddev) from the captured samples and persist it by the training session's name, reusable anywhere a built-in persona is. A capture with too few distinct mouse movements or keystrokes to fit MUST fail with a typed error instead of persisting a degenerate profile.
