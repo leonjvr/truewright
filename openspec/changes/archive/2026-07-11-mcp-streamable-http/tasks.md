@@ -27,5 +27,5 @@
 ## 6. Wrap-up
 - [x] 6.1 Update README with `aib mcp --http` usage (flags, the printed token, how to point an MCP client at it)
 - [x] 6.2 Update PROPOSAL.md's Phase 5 roadmap
-- [ ] 6.3 `openspec archive mcp-streamable-http -y`, fix any "Purpose: TBD" placeholder in the synced spec
-- [ ] 6.4 Three commits: Propose, Implement, Sync-specs-and-archive
+- [x] 6.3 `openspec archive mcp-streamable-http -y`, fix any "Purpose: TBD" placeholder in the synced spec
+- [x] 6.4 Three commits: Propose, Implement, Sync-specs-and-archive
