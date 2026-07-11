@@ -144,9 +144,27 @@
     var structural = STRUCTURAL_TAGS.has(el.tagName);
     var visible = isVisible(el);
 
+    // An open shadow root's content is a separate tree from el.children
+    // (light DOM) -- walk it instead, not in addition, since light-DOM
+    // children are either projected via a matching <slot> (reachable
+    // through the shadow tree itself, below) or not rendered at all.
+    // Closed shadow roots report shadowRoot === null indistinguishably
+    // from "no shadow root" -- genuinely undetectable from script, so
+    // they fall through to the light-DOM case below (shadow-dom-walker
+    // spec: "Refs and clicks work on shadow-tree elements").
+    var childSource;
+    if (el.tagName === 'SLOT') {
+      var assigned = el.assignedElements ? el.assignedElements() : [];
+      childSource = assigned.length ? assigned : el.children;
+    } else if (el.shadowRoot) {
+      childSource = el.shadowRoot.children;
+    } else {
+      childSource = el.children;
+    }
+
     var children = [];
-    for (var i = 0; i < el.children.length; i++) {
-      var node = walk(el.children[i], depth + 1);
+    for (var i = 0; i < childSource.length; i++) {
+      var node = walk(childSource[i], depth + 1);
       if (node) children.push(node);
     }
 

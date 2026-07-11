@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Shadow DOM Test</title>
+</head>
+<body>
+  <h1>Top page</h1>
+  <my-card>
+    <h2>Card Title</h2>
+  </my-card>
+  <script>
+    class MyCard extends HTMLElement {
+      constructor() {
+        super();
+        var shadow = this.attachShadow({ mode: 'open' });
+        shadow.innerHTML =
+          '<div class="card">' +
+          '<slot></slot>' +
+          '<button id="card-btn" type="button">Card Button</button>' +
+          '<p id="status"></p>' +
+          '</div>';
+        shadow.getElementById('card-btn').addEventListener('click', function () {
+          shadow.getElementById('status').textContent = 'Clicked';
+        });
+      }
+    }
+    customElements.define('my-card', MyCard);
+  </script>
+</body>
+</html>
