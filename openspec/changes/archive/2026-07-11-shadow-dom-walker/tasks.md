@@ -18,5 +18,5 @@
 ## 4. Wrap-up
 - [x] 4.1 Update README noting shadow-DOM support and the closed-shadow-root limitation
 - [x] 4.2 Update PROPOSAL.md's Phase 5 roadmap
-- [ ] 4.3 `openspec archive shadow-dom-walker -y`, fix any "Purpose: TBD" placeholder in the synced spec
-- [ ] 4.4 Three commits: Propose, Implement, Sync-specs-and-archive
+- [x] 4.3 `openspec archive shadow-dom-walker -y`, fix any "Purpose: TBD" placeholder in the synced spec
+- [x] 4.4 Three commits: Propose, Implement, Sync-specs-and-archive
