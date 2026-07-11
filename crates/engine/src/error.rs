@@ -52,6 +52,9 @@ pub enum EngineError {
 
     #[error("{0}")]
     Clock(String),
+
+    #[error("console capture failed: {0}")]
+    Console(String),
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;

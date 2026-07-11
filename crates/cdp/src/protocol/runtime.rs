@@ -50,6 +50,47 @@ impl CdpEvent for BindingCalled {
     const METHOD: &'static str = "Runtime.bindingCalled";
 }
 
+/// Fired for every `console.*` call in the page (console-capture spec:
+/// "Console and exception capture to a named JSONL trace"). Rides the
+/// `Runtime` domain already enabled on every page.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleApiCalled {
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub args: Vec<RemoteObject>,
+    pub timestamp: f64,
+}
+impl CdpEvent for ConsoleApiCalled {
+    const METHOD: &'static str = "Runtime.consoleAPICalled";
+}
+
+/// Fired for an uncaught exception in the page.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExceptionThrown {
+    pub timestamp: f64,
+    pub exception_details: ExceptionDetails,
+}
+impl CdpEvent for ExceptionThrown {
+    const METHOD: &'static str = "Runtime.exceptionThrown";
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExceptionDetails {
+    pub text: String,
+    #[serde(default)]
+    pub line_number: i64,
+    #[serde(default)]
+    pub column_number: i64,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub exception: Option<RemoteObject>,
+}
+
 pub struct Evaluate;
 impl Command for Evaluate {
     const METHOD: &'static str = "Runtime.evaluate";
@@ -85,7 +126,7 @@ pub struct EvaluateResponse {
     pub exception_details: Option<Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteObject {
     #[serde(rename = "type")]

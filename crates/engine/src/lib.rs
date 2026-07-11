@@ -5,6 +5,7 @@
 //! /openspec/changes/archive/*-human-motion-synthetic/design.md for scope
 //! decisions.
 
+mod console;
 mod error;
 mod keys;
 pub mod motion;
@@ -13,6 +14,7 @@ pub mod recording;
 mod session;
 mod snapshot;
 
+pub use console::{ConsoleCapture, ConsoleCaptureSummary, TraceEntry};
 pub use error::{EngineError, Result};
 pub use motion::profile_store::StoredProfile;
 pub use motion::{Persona, Training};

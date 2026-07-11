@@ -208,6 +208,13 @@ impl Session {
         Ok(())
     }
 
+    /// Starts capturing console output and uncaught exceptions on the
+    /// current page (console-capture spec). `ConsoleCapture::stop` finishes
+    /// and persists the JSONL trace under `name`.
+    pub async fn console_capture_start(&self, name: &str) -> Result<crate::console::ConsoleCapture> {
+        crate::console::ConsoleCapture::start(&self.page, name).await
+    }
+
     pub async fn navigate(&self, url: &str) -> Result<String> {
         self.page.navigate_and_wait(url, NAVIGATE_TIMEOUT).await?;
         self.snapshot().await

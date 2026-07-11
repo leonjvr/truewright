@@ -142,6 +142,12 @@ pub struct NetworkNameRequest {
     pub name: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ConsoleStartRequest {
+    #[schemars(description = "Name to save the JSONL console/exception trace under")]
+    pub name: String,
+}
+
 #[derive(Clone)]
 pub struct AibTools {
     session: Arc<Mutex<Option<engine::Session>>>,
@@ -149,6 +155,7 @@ pub struct AibTools {
     training: Arc<Mutex<Option<engine::Training>>>,
     network_recording: Arc<Mutex<Option<engine::NetworkRecording>>>,
     network_replay: Arc<Mutex<Option<engine::NetworkReplay>>>,
+    console_capture: Arc<Mutex<Option<engine::ConsoleCapture>>>,
     headless: bool,
     browser_pref: cdp::launch::BrowserPreference,
     // Read by the `#[tool_handler]`-generated `ServerHandler` impl to route
@@ -170,6 +177,7 @@ impl AibTools {
             training: Arc::new(Mutex::new(None)),
             network_recording: Arc::new(Mutex::new(None)),
             network_replay: Arc::new(Mutex::new(None)),
+            console_capture: Arc::new(Mutex::new(None)),
             headless,
             browser_pref,
             tool_router: Self::tool_router(),
@@ -251,6 +259,58 @@ impl AibTools {
         session.advance_clock(ms).await.map_err(map_engine_err)?;
         Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "virtual clock advanced by {ms}ms."
+        ))]))
+    }
+
+    #[tool(
+        description = "Start capturing the page's console.* output and uncaught exceptions to a named JSONL trace. Fails if a console capture is already active."
+    )]
+    async fn browser_console_start(
+        &self,
+        Parameters(ConsoleStartRequest { name }): Parameters<ConsoleStartRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_session().await?;
+
+        let mut console_guard = self.console_capture.lock().await;
+        if console_guard.is_some() {
+            return Err(McpError::invalid_params(
+                "a console capture is already in progress; call browser_console_stop first",
+                None,
+            ));
+        }
+
+        let session_guard = self.session.lock().await;
+        let session = session_guard.as_ref().ok_or_else(no_session_error)?;
+
+        let capture = session
+            .console_capture_start(&name)
+            .await
+            .map_err(map_engine_err)?;
+        *console_guard = Some(capture);
+
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "console capture started for {name:?}. Call browser_console_stop when done \
+             (auto-stops after 5 minutes)."
+        ))]))
+    }
+
+    #[tool(description = "Stop the active console capture and save the JSONL trace")]
+    async fn browser_console_stop(&self) -> Result<CallToolResult, McpError> {
+        let capture = self
+            .console_capture
+            .lock()
+            .await
+            .take()
+            .ok_or_else(|| McpError::invalid_params("no console capture is in progress", None))?;
+
+        let summary = capture.stop().await.map_err(map_engine_err)?;
+
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "console trace {:?} saved: {} entr{} to {}",
+            summary.name,
+            summary.entry_count,
+            if summary.entry_count == 1 { "y" } else { "ies" },
+            summary.path.display()
         ))]))
     }
 
@@ -642,6 +702,7 @@ impl ServerHandler for AibTools {
                  browser_network_replay_start(name), browser_network_replay_stop(), \
                  browser_add_init_script(source), browser_seed_randomness(seed), \
                  browser_set_clock(time_ms), browser_advance_clock(ms), \
+                 browser_console_start(name), browser_console_stop(), \
                  browser_close(). Refs come from the snapshot text, e.g. `[e6]` -> ref \"e6\". \
                  Actions do not auto-return a new snapshot; call browser_snapshot again after an \
                  action that may have changed the page. Use browser_record_start/stop to capture a \
@@ -671,7 +732,9 @@ impl ServerHandler for AibTools {
                  call browser_advance_clock(ms) at any point afterward to move it forward and fire \
                  every due callback in order, e.g. to make a session-timeout warning or a debounced \
                  handler fire instantly and deterministically instead of waiting for real time or \
-                 skipping the behavior."
+                 skipping the behavior. Use browser_console_start(name)/stop to capture the page's \
+                 console.log/warn/error output and any uncaught exceptions to a named JSONL trace -- \
+                 useful for finding out why a test failed or an app behaved unexpectedly."
                     .to_string(),
             )
     }
@@ -713,7 +776,7 @@ fn map_engine_err(e: engine::EngineError) -> McpError {
         StaleRef(_) | UnknownKey(_) | UnknownPersona(_) | UntrainedProfile(_) | AmbiguousPersona
         | UnknownCassette(_) | Clock(_) => McpError::invalid_params(e.to_string(), None),
         ActionTimeout { .. } | WaitTimeout { .. } | Cdp(_) | Serde(_) | Recording(_) | Training(_)
-        | Network(_) => McpError::internal_error(e.to_string(), None),
+        | Network(_) | Console(_) => McpError::internal_error(e.to_string(), None),
     }
 }
 

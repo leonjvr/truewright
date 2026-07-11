@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Console Fixture</title></head>
+<body>
+  <main>
+    <h1>Console Fixture</h1>
+  </main>
+  <script>
+    console.log('log message');
+    console.warn('warn message');
+    console.error('error message');
+    setTimeout(function () {
+      throw new Error('boom');
+    }, 0);
+  </script>
+</body>
+</html>
