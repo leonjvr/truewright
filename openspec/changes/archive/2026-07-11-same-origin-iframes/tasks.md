@@ -19,5 +19,5 @@
 ## 4. Wrap-up
 - [x] 4.1 Update README noting same-origin iframe support and the cross-origin boundary behavior
 - [x] 4.2 Update PROPOSAL.md's Phase 5 roadmap
-- [ ] 4.3 `openspec archive same-origin-iframes -y`, fix any "Purpose: TBD" placeholder in the synced spec
-- [ ] 4.4 Three commits: Propose, Implement, Sync-specs-and-archive
+- [x] 4.3 `openspec archive same-origin-iframes -y`, fix any "Purpose: TBD" placeholder in the synced spec
+- [x] 4.4 Three commits: Propose, Implement, Sync-specs-and-archive
