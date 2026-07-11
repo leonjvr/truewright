@@ -20,6 +20,27 @@ pub struct SetLifecycleEventsEnabledParams {
     pub enabled: bool,
 }
 
+/// Registers a script that runs before any of a page's own scripts, on
+/// every subsequent navigation -- unlike `Runtime.evaluate`, which only
+/// runs after a page has already loaded (deterministic-init spec: "Init
+/// scripts run before a page's own scripts").
+pub struct AddScriptToEvaluateOnNewDocument;
+impl Command for AddScriptToEvaluateOnNewDocument {
+    const METHOD: &'static str = "Page.addScriptToEvaluateOnNewDocument";
+    type Params = AddScriptToEvaluateOnNewDocumentParams;
+    type Response = AddScriptToEvaluateOnNewDocumentResponse;
+}
+
+#[derive(Debug, Serialize)]
+pub struct AddScriptToEvaluateOnNewDocumentParams {
+    pub source: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddScriptToEvaluateOnNewDocumentResponse {
+    pub identifier: String,
+}
+
 pub struct Navigate;
 impl Command for Navigate {
     const METHOD: &'static str = "Page.navigate";

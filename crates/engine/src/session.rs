@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 const RESOLVE_JS: &str = include_str!("../assets/resolve.js");
+const SEEDED_RANDOM_JS: &str = include_str!("../assets/seeded_random.js");
 
 const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_ACTION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -160,6 +161,23 @@ impl Session {
     /// interception.
     pub async fn network_replay_start(&self, name: &str) -> Result<crate::network::NetworkReplay> {
         crate::network::NetworkReplay::start(&self.page, name).await
+    }
+
+    /// Registers JS that runs before any of a page's own scripts, on every
+    /// subsequent navigation (deterministic-init spec: "Init scripts run
+    /// before a page's own scripts"). Register before navigating -- an
+    /// init script only affects loads that happen after it's registered.
+    pub async fn add_init_script(&self, source: &str) -> Result<()> {
+        self.page.add_init_script(source).await?;
+        Ok(())
+    }
+
+    /// Overrides `Math.random` with a deterministic PRNG seeded from
+    /// `seed`, via `add_init_script` (deterministic-init spec: "Seeded,
+    /// reproducible Math.random").
+    pub async fn seed_randomness(&self, seed: u64) -> Result<()> {
+        let script = SEEDED_RANDOM_JS.replace("%SEED%", &(seed as u32).to_string());
+        self.add_init_script(&script).await
     }
 
     pub async fn navigate(&self, url: &str) -> Result<String> {

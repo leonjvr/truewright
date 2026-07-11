@@ -15,6 +15,22 @@ pub struct NavigateRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct AddInitScriptRequest {
+    #[schemars(
+        description = "JavaScript to run before any of the page's own scripts, on every subsequent navigation in this session. Register before browser_navigate -- it only affects loads that happen after registration."
+    )]
+    pub source: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SeedRandomnessRequest {
+    #[schemars(
+        description = "Seed for a deterministic Math.random() override, registered as an init script (register before browser_navigate). Same seed -> identical Math.random() sequence across navigations."
+    )]
+    pub seed: u64,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RefRequest {
     #[schemars(description = "Element ref from a snapshot, e.g. \"e6\"")]
     pub r#ref: String,
@@ -153,6 +169,41 @@ impl AibTools {
             *guard = Some(session);
         }
         Ok(())
+    }
+
+    #[tool(
+        description = "Register JS that runs before any of the page's own scripts, on every subsequent navigation. Call before browser_navigate for it to take effect."
+    )]
+    async fn browser_add_init_script(
+        &self,
+        Parameters(AddInitScriptRequest { source }): Parameters<AddInitScriptRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_session().await?;
+        let guard = self.session.lock().await;
+        let session = guard.as_ref().ok_or_else(no_session_error)?;
+        session
+            .add_init_script(&source)
+            .await
+            .map_err(map_engine_err)?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            "init script registered; call browser_navigate for it to take effect.",
+        )]))
+    }
+
+    #[tool(
+        description = "Override Math.random with a deterministic PRNG seeded from the given value, for reproducible test runs. Call before browser_navigate for it to take effect."
+    )]
+    async fn browser_seed_randomness(
+        &self,
+        Parameters(SeedRandomnessRequest { seed }): Parameters<SeedRandomnessRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_session().await?;
+        let guard = self.session.lock().await;
+        let session = guard.as_ref().ok_or_else(no_session_error)?;
+        session.seed_randomness(seed).await.map_err(map_engine_err)?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "Math.random seeded with {seed}; call browser_navigate for it to take effect."
+        ))]))
     }
 
     #[tool(description = "Navigate to a URL and return a snapshot of the resulting page")]
@@ -541,6 +592,7 @@ impl ServerHandler for AibTools {
                  browser_train_start(name), browser_train_stop(), \
                  browser_network_record_start(name), browser_network_record_stop(), \
                  browser_network_replay_start(name), browser_network_replay_stop(), \
+                 browser_add_init_script(source), browser_seed_randomness(seed), \
                  browser_close(). Refs come from the snapshot text, e.g. `[e6]` -> ref \"e6\". \
                  Actions do not auto-return a new snapshot; call browser_snapshot again after an \
                  action that may have changed the page. Use browser_record_start/stop to capture a \
@@ -558,7 +610,13 @@ impl ServerHandler for AibTools {
                  named cassette, then browser_network_replay_start(name)/stop to replay a later run \
                  entirely from that cassette with no live-backend dependency -- a request with no \
                  matching recorded response fails loudly rather than silently reaching the real \
-                 network, so an incomplete recording is obvious immediately."
+                 network, so an incomplete recording is obvious immediately. Use \
+                 browser_add_init_script(source) to run JS before a page's own scripts (not just \
+                 before an agent action, unlike snapshot/evaluate-based reads) -- register it, then \
+                 call browser_navigate for it to take effect. browser_seed_randomness(seed) is the \
+                 same mechanism pre-built to override Math.random with a deterministic PRNG, so an \
+                 app's own random IDs/variants/animations become reproducible across runs with the \
+                 same seed."
                     .to_string(),
             )
     }

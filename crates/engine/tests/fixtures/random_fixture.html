@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Random Fixture</title></head>
+<body>
+  <main>
+    <h1>Random Fixture</h1>
+    <p id="result"></p>
+  </main>
+  <script>
+    var values = [];
+    for (var i = 0; i < 5; i++) {
+      values.push(Math.random().toFixed(10));
+    }
+    document.getElementById('result').textContent = values.join(',');
+  </script>
+</body>
+</html>

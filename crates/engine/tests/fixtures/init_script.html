@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Init Script Fixture</title>
+  <script>
+    // Runs at parse time, before <body> even exists -- if an init script
+    // set window.__initFlag, it must already be present here, proving
+    // injection happens before any of the page's own scripts, not just
+    // before an agent action taken afterward.
+    window.__sawInitFlag = (typeof window.__initFlag !== 'undefined') ? window.__initFlag : 'MISSING';
+  </script>
+</head>
+<body>
+  <main>
+    <h1>Init Script Fixture</h1>
+    <p id="result"></p>
+  </main>
+  <script>
+    document.getElementById('result').textContent = 'flag=' + window.__sawInitFlag;
+  </script>
+</body>
+</html>

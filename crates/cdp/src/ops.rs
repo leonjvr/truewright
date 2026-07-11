@@ -141,6 +141,21 @@ impl Page {
             .map_err(|_| CdpError::Timeout(timeout))
     }
 
+    /// Registers a script that runs before any of a page's own scripts, on
+    /// every subsequent navigation (deterministic-init spec). Returns the
+    /// CDP-assigned identifier.
+    pub async fn add_init_script(&self, source: &str) -> Result<String> {
+        let resp = self
+            .session
+            .execute::<page::AddScriptToEvaluateOnNewDocument>(
+                page::AddScriptToEvaluateOnNewDocumentParams {
+                    source: source.to_string(),
+                },
+            )
+            .await?;
+        Ok(resp.identifier)
+    }
+
     pub async fn evaluate(&self, expression: &str) -> Result<serde_json::Value> {
         let resp = self
             .session
