@@ -1,0 +1,32 @@
+## Why
+
+`same-origin-iframes` shipped a real, useful capability but drew an honest line at its name: a cross-origin iframe renders as an explicit "not inspectable" leaf rather than vanishing, but its content genuinely isn't reachable -- because Chrome runs a cross-origin iframe as an Out-Of-Process IFrame (OOPIF), a real separate CDP target with its own renderer process and JS heap, not something the parent page's own `Runtime.evaluate` context can reach into. This is common in real apps agents need to test: third-party payment widgets (Stripe Elements), embedded auth (OAuth consent iframes that don't redirect), ad/analytics iframes, cross-subdomain micro-frontends. This change makes that content actually inspectable and interactable, the way `same-origin-iframes` already did for the same-origin case.
+
+## What Changes
+
+- **Discovery/attach**: `engine::Session`'s existing target-discovery poll (already browser-wide via `Target.setDiscoverTargets`, already the mechanism used for popup auto-attach) now also attaches to `iframe`-type targets instead of discarding them, tracked in a new registry separate from top-level pages (never becomes the "active page" -- an OOPIF isn't something an agent switches to, it's part of rendering the current page, same posture as same-origin iframe content already has).
+- **Frame-to-element correlation**: `Page.getFrameTree` scopes which attached OOPIFs actually belong to the current page's own frame tree (relevant once a session has multiple pages, e.g. after a popup). For each relevant OOPIF, `DOM.getFrameOwner(frameId)` → `DOM.resolveNode(backendNodeId)` → `Runtime.callFunctionOn(...)` (all new CDP protocol surface -- `crates/cdp/src/protocol/dom.rs` is new, `Runtime.callFunctionOn` and `Page.getFrameTree` are added to existing modules) gets or creates the *same* top-level ref the walker itself would assign to that `<iframe>` element -- reusing the identical `refFor` registry logic already in `assets/walker.js`, called via a live JS object handle instead of `Runtime.evaluate`'s string-expression path.
+- **Walker**: `assets/walker.js`'s `walkIframe` now assigns a ref to every iframe element (same-origin and cross-origin alike -- previously only same-origin content ever got a ref, via elements *inside* it, never the `<iframe>` tag itself), so the correlation step above can find the matching tree node.
+- **Snapshot splicing**: after the top-level walk, `Session::snapshot()` matches each correlated OOPIF ref against the walked tree, runs the *same* `walker.js` again inside that OOPIF's own attached session (its own isolated realm, its own local `window.__aib` ref registry), and splices the result in as that iframe node's children -- mirroring exactly how same-origin iframe content is already spliced in, just sourced from a second CDP session instead of a local `contentDocument` walk.
+- **Ref namespacing**: refs from inside an OOPIF are prefixed (`f1:e3`) to disambiguate which session's registry they belong to; top-level and same-origin-nested refs are unchanged (bare `e3`), so this is additive, not a breaking change to the existing ref format.
+- **Click/type coordinate translation**: `resolve_ref` recognizes the `f<N>:` prefix, evaluates `resolve.js` inside the OOPIF's own session to get a viewport-local click point (unmodified `resolve.js` -- `window.frameElement` is already `null` from inside a cross-origin child by browser design, so the existing ancestor-walk loop naturally stops there with no code change needed), then adds the OOPIF's own on-screen position (resolved via its already-correlated top-level ref) to translate into top-level-page viewport coordinates, where `Input.dispatchMouseEvent` is always issued regardless of which process actually renders that pixel.
+
+**Explicitly out of scope (deferred), and why:**
+- **Nested OOPIFs, or an OOPIF nested inside a same-origin iframe.** V1 handles an OOPIF as a direct child of the top-level page only. Real-world third-party widgets (the motivating case) are essentially always direct children; deeper nesting is a real but much rarer case that would multiply the correlation/splicing logic without a concrete test case motivating it yet.
+- **Typing/pressing keys inside OOPIF content beyond what coordinate-based click already unlocks.** `browser_type`'s existing click-to-focus-then-`Input.insertText`/`dispatchKeyEvent` flow is issued on the top-level page's session already (same as today) -- since focus and key routing follow the browser's own compositor-level focus state once a click lands inside the OOPIF, this should work unmodified, but is called out explicitly as something to verify live, not assumed.
+- **`window.open()` popups that are themselves cross-origin OOPIFs of something.** Popups are already separate top-level `page`-type targets (popup-auto-attach), not `iframe`-type OOPIF targets -- untouched by this change either way.
+
+## Capabilities
+
+### Modified Capabilities
+- `same-origin-iframes`: cross-origin iframes backed by a genuinely attachable OOPIF target now render their real content instead of the "not inspectable" leaf; iframes without an attachable OOPIF (rare -- e.g. a cross-origin iframe Chrome didn't isolate into its own process) keep the existing not-inspectable fallback, so nothing regresses for a case this change doesn't cover.
+
+## Impact
+
+- `crates/cdp/src/protocol/dom.rs` (new): `DOM.enable`, `DOM.getFrameOwner`, `DOM.resolveNode`.
+- `crates/cdp/src/protocol/runtime.rs`: new `Runtime.callFunctionOn` command; `RemoteObject` gains an `object_id` field.
+- `crates/cdp/src/protocol/page.rs`: new `Page.getFrameTree` command.
+- `crates/cdp/src/ops.rs`: `Page` gains `frame_tree()`, `ref_for_frame_owner(frame_id)`.
+- `crates/engine/assets/walker.js`: `walkIframe` assigns a ref to every iframe element.
+- `crates/engine/src/session.rs`: OOPIF target registry, discovery/attach in the existing poll, `snapshot()` splicing pass, `resolve_ref` namespaced-ref handling.
+- New live-fixture testing infrastructure: two distinct `.localhost` subdomains (different "site" under Chrome's site-isolation model, unlike same-`127.0.0.1`-different-port which shares a site) to reliably force a genuine OOPIF, not just an opaque-origin `data:` URL (which never gets its own process/target).
