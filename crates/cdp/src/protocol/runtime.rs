@@ -1,4 +1,4 @@
-use crate::session::Command;
+use crate::session::{CdpEvent, Command};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -7,6 +7,47 @@ impl Command for Enable {
     const METHOD: &'static str = "Runtime.enable";
     type Params = super::EmptyParams;
     type Response = super::EmptyResponse;
+}
+
+/// Exposes `window.<name>(payload)` in the page as a call back into this
+/// process, surfaced as a `BindingCalled` event (human-motion spec:
+/// "Training capture from real trusted input" — the injected recorder
+/// reports DOM events through this).
+pub struct AddBinding;
+impl Command for AddBinding {
+    const METHOD: &'static str = "Runtime.addBinding";
+    type Params = AddBindingParams;
+    type Response = super::EmptyResponse;
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddBindingParams {
+    pub name: String,
+}
+
+pub struct RemoveBinding;
+impl Command for RemoveBinding {
+    const METHOD: &'static str = "Runtime.removeBinding";
+    type Params = RemoveBindingParams;
+    type Response = super::EmptyResponse;
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveBindingParams {
+    pub name: String,
+}
+
+/// Fired once per call to the bound function installed by `AddBinding`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BindingCalled {
+    pub name: String,
+    pub payload: String,
+}
+impl CdpEvent for BindingCalled {
+    const METHOD: &'static str = "Runtime.bindingCalled";
 }
 
 pub struct Evaluate;

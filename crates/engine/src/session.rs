@@ -4,6 +4,8 @@ use crate::motion::{self, Persona};
 use crate::recording::{Recording, RecordingOptions};
 use crate::snapshot::{self, SnapshotResult};
 use serde::Deserialize;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
@@ -27,6 +29,13 @@ pub struct Session {
     /// wherever the cursor actually is instead of teleporting (human-motion
     /// spec: "Curved, timed mouse movement to a target").
     mouse_pos: Mutex<(f64, f64)>,
+    /// Set while a training session is active; click/type/press bracket
+    /// their own CDP dispatch with the page-level suppress flag so it isn't
+    /// mistaken for real human input (human-motion spec: "Synthetic
+    /// dispatch is not captured as training data" — CDP-dispatched events
+    /// are themselves `isTrusted`, so this flag, not `isTrusted`, is the
+    /// actual guard).
+    training_active: Arc<AtomicBool>,
 }
 
 /// Requests a human-like (curved mouse path / paced typing cadence) variant
@@ -91,6 +100,7 @@ impl Session {
             context,
             page,
             mouse_pos: Mutex::new((0.0, 0.0)),
+            training_active: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -103,6 +113,38 @@ impl Session {
     #[allow(clippy::result_large_err)]
     pub fn persona(name: &str) -> Result<Persona> {
         Persona::by_name(name).ok_or_else(|| EngineError::UnknownPersona(name.to_string()))
+    }
+
+    /// Resolves a `browser_click`/`browser_type` request's `persona`/
+    /// `trained_profile` fields into one `Persona` (human-motion spec:
+    /// "Untrained profile fails clearly"). Specifying both is ambiguous;
+    /// specifying neither falls back to `Persona::average()`, same as
+    /// omitting `persona` alone already did.
+    // EngineError is kept as one flat enum (matches cdp::CdpError's
+    // rationale); see the identical allow in cdp/src/launch.rs.
+    #[allow(clippy::result_large_err)]
+    pub fn persona_or_trained(persona: Option<&str>, trained_profile: Option<&str>) -> Result<Persona> {
+        match (persona, trained_profile) {
+            (Some(_), Some(_)) => Err(EngineError::AmbiguousPersona),
+            (Some(name), None) => Self::persona(name),
+            (None, Some(name)) => motion::profile_store::load(name),
+            (None, None) => Ok(Persona::average()),
+        }
+    }
+
+    /// Starts capturing genuinely trusted input for a training session
+    /// (human-motion spec: "Training capture from real trusted input").
+    /// `Training::stop` finishes and persists the fitted profile under
+    /// `name`.
+    pub async fn train_start(&self, name: &str) -> Result<motion::Training> {
+        self.training_active.store(true, Ordering::SeqCst);
+        match motion::Training::start(&self.page, name, self.training_active.clone()).await {
+            Ok(training) => Ok(training),
+            Err(e) => {
+                self.training_active.store(false, Ordering::SeqCst);
+                Err(e)
+            }
+        }
     }
 
     pub async fn navigate(&self, url: &str) -> Result<String> {
@@ -130,25 +172,10 @@ impl Session {
     /// target"). Returns the seed used, if human-like mode was requested, so
     /// the run can be reproduced.
     pub async fn click_with(&self, r#ref: &str, human: Option<HumanLike>) -> Result<Option<u64>> {
-        let coords = self
-            .resolve_actionable(r#ref, DEFAULT_ACTION_TIMEOUT)
-            .await?;
-
-        let seed = if let Some(HumanLike { persona, seed }) = human {
-            let seed = seed.unwrap_or_else(rand_seed);
-            let mut rng = motion::seeded_rng(seed);
-            let from = *self.mouse_pos.lock().await;
-            let target_size = coords.width.max(coords.height).max(1.0);
-            let path = motion::mouse_path(from, (coords.x, coords.y), target_size, &persona, &mut rng);
-            self.walk_mouse_path(&path).await?;
-            Some(seed)
-        } else {
-            None
-        };
-
-        self.page.click_at(coords.x, coords.y).await?;
-        *self.mouse_pos.lock().await = (coords.x, coords.y);
-        Ok(seed)
+        let suppress = self.begin_training_suppression().await;
+        let result = self.click_dispatch(r#ref, human).await;
+        self.end_training_suppression(suppress).await;
+        result
     }
 
     /// Clicks to focus, then inserts text (browser-actions spec: "Type by
@@ -170,10 +197,56 @@ impl Session {
         submit: bool,
         human: Option<HumanLike>,
     ) -> Result<Option<u64>> {
+        // Suppressed once for the whole action (focus-click + typing +
+        // optional submit), not per sub-step -- sub-steps below call the
+        // unwrapped `_dispatch` variants so the suppress flag isn't
+        // cleared partway through by a nested toggle.
+        let suppress = self.begin_training_suppression().await;
+        let result = self.type_text_dispatch(r#ref, text, submit, human).await;
+        self.end_training_suppression(suppress).await;
+        result
+    }
+
+    pub async fn press(&self, key: &str) -> Result<()> {
+        let suppress = self.begin_training_suppression().await;
+        let result = self.press_dispatch(key).await;
+        self.end_training_suppression(suppress).await;
+        result
+    }
+
+    async fn click_dispatch(&self, r#ref: &str, human: Option<HumanLike>) -> Result<Option<u64>> {
+        let coords = self
+            .resolve_actionable(r#ref, DEFAULT_ACTION_TIMEOUT)
+            .await?;
+
+        let seed = if let Some(HumanLike { persona, seed }) = human {
+            let seed = seed.unwrap_or_else(rand_seed);
+            let mut rng = motion::seeded_rng(seed);
+            let from = *self.mouse_pos.lock().await;
+            let target_size = coords.width.max(coords.height).max(1.0);
+            let path = motion::mouse_path(from, (coords.x, coords.y), target_size, &persona, &mut rng);
+            self.walk_mouse_path(&path).await?;
+            Some(seed)
+        } else {
+            None
+        };
+
+        self.page.click_at(coords.x, coords.y).await?;
+        *self.mouse_pos.lock().await = (coords.x, coords.y);
+        Ok(seed)
+    }
+
+    async fn type_text_dispatch(
+        &self,
+        r#ref: &str,
+        text: &str,
+        submit: bool,
+        human: Option<HumanLike>,
+    ) -> Result<Option<u64>> {
         let seed = match human {
             Some(HumanLike { persona, seed }) => {
                 let seed = seed.unwrap_or_else(rand_seed);
-                self.click_with(
+                self.click_dispatch(
                     r#ref,
                     Some(HumanLike {
                         persona,
@@ -188,24 +261,47 @@ impl Session {
                 Some(seed)
             }
             None => {
-                self.click(r#ref).await?;
+                self.click_dispatch(r#ref, None).await?;
                 self.page.insert_text(text).await?;
                 None
             }
         };
 
         if submit {
-            self.press("Enter").await?;
+            self.press_dispatch("Enter").await?;
         }
         Ok(seed)
     }
 
-    pub async fn press(&self, key: &str) -> Result<()> {
+    async fn press_dispatch(&self, key: &str) -> Result<()> {
         let spec = keys::lookup(key).ok_or_else(|| EngineError::UnknownKey(key.to_string()))?;
         self.page
             .dispatch_key(spec.key, spec.code, spec.windows_virtual_key_code)
             .await?;
         Ok(())
+    }
+
+    /// If a training session is active, flags this page's recorder to
+    /// ignore events for the duration of the caller's action -- CDP
+    /// dispatch is itself `isTrusted`, so `isTrusted` alone can't tell this
+    /// engine's own synthetic input apart from a real human's (human-motion
+    /// spec: "Synthetic dispatch is not captured as training data"). A
+    /// no-op (and no extra round trip) when no training session is active.
+    async fn begin_training_suppression(&self) -> bool {
+        let suppress = self.training_active.load(Ordering::SeqCst);
+        if suppress {
+            let _ = self.page.evaluate("window.__aibSuppressTraining = true").await;
+        }
+        suppress
+    }
+
+    async fn end_training_suppression(&self, was_suppressing: bool) {
+        if was_suppressing {
+            let _ = self
+                .page
+                .evaluate("window.__aibSuppressTraining = false")
+                .await;
+        }
     }
 
     /// Polls the rendered snapshot for a substring (browser-actions spec:

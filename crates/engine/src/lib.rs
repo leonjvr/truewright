@@ -13,6 +13,7 @@ mod session;
 mod snapshot;
 
 pub use error::{EngineError, Result};
-pub use motion::Persona;
+pub use motion::profile_store::StoredProfile;
+pub use motion::{Persona, Training};
 pub use recording::{Recording, RecordingOptions, RecordingOutput};
 pub use session::{HumanLike, Session};

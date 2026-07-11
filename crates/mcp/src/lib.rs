@@ -25,9 +25,14 @@ pub struct RefRequest {
     pub human_like: bool,
     #[serde(default)]
     #[schemars(
-        description = "Persona for human_like motion: one of careful, average, fast (default average)"
+        description = "Persona for human_like motion: one of careful, average, fast (default average). Mutually exclusive with trained_profile."
     )]
     pub persona: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Name of a profile trained via browser_train_start/stop; replays that human's fitted timing instead of a synthetic persona. Mutually exclusive with persona. Fails clearly if the name was never trained."
+    )]
+    pub trained_profile: Option<String>,
     #[serde(default)]
     #[schemars(description = "Fixed seed for reproducible human_like motion (default: random)")]
     pub seed: Option<u64>,
@@ -49,9 +54,14 @@ pub struct TypeRequest {
     pub human_like: bool,
     #[serde(default)]
     #[schemars(
-        description = "Persona for human_like motion: one of careful, average, fast (default average)"
+        description = "Persona for human_like motion: one of careful, average, fast (default average). Mutually exclusive with trained_profile."
     )]
     pub persona: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Name of a profile trained via browser_train_start/stop; replays that human's fitted timing instead of a synthetic persona. Mutually exclusive with persona. Fails clearly if the name was never trained."
+    )]
+    pub trained_profile: Option<String>,
     #[serde(default)]
     #[schemars(description = "Fixed seed for reproducible human_like motion (default: random)")]
     pub seed: Option<u64>,
@@ -86,10 +96,19 @@ pub struct RecordStartRequest {
 
 const DEFAULT_WAIT_FOR_MS: u64 = 5000;
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct TrainStartRequest {
+    #[schemars(
+        description = "Name to save the trained profile under; browser_train_stop persists it, and browser_click/browser_type's trained_profile selects it later"
+    )]
+    pub name: String,
+}
+
 #[derive(Clone)]
 pub struct AibTools {
     session: Arc<Mutex<Option<engine::Session>>>,
     recording: Arc<Mutex<Option<engine::Recording>>>,
+    training: Arc<Mutex<Option<engine::Training>>>,
     headless: bool,
     browser_pref: cdp::launch::BrowserPreference,
     // Read by the `#[tool_handler]`-generated `ServerHandler` impl to route
@@ -108,6 +127,7 @@ impl AibTools {
         Self {
             session: Arc::new(Mutex::new(None)),
             recording: Arc::new(Mutex::new(None)),
+            training: Arc::new(Mutex::new(None)),
             headless,
             browser_pref,
             tool_router: Self::tool_router(),
@@ -155,13 +175,14 @@ impl AibTools {
             r#ref,
             human_like,
             persona,
+            trained_profile,
             seed,
         }): Parameters<RefRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.ensure_session().await?;
         let guard = self.session.lock().await;
         let session = guard.as_ref().ok_or_else(no_session_error)?;
-        let human = build_human_like(human_like, persona, seed)?;
+        let human = build_human_like(human_like, persona, trained_profile, seed)?;
         let used_seed = session
             .click_with(&r#ref, human)
             .await
@@ -183,13 +204,14 @@ impl AibTools {
             submit,
             human_like,
             persona,
+            trained_profile,
             seed,
         }): Parameters<TypeRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.ensure_session().await?;
         let guard = self.session.lock().await;
         let session = guard.as_ref().ok_or_else(no_session_error)?;
-        let human = build_human_like(human_like, persona, seed)?;
+        let human = build_human_like(human_like, persona, trained_profile, seed)?;
         let used_seed = session
             .type_text_with(&r#ref, &text, submit, human)
             .await
@@ -319,6 +341,55 @@ impl AibTools {
         Ok(CallToolResult::success(content))
     }
 
+    #[tool(
+        description = "Start capturing real, trusted mouse/keyboard input from the human physically using the browser window, for later human-like replay. Fails if a training session is already active."
+    )]
+    async fn browser_train_start(
+        &self,
+        Parameters(TrainStartRequest { name }): Parameters<TrainStartRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_session().await?;
+
+        let mut training_guard = self.training.lock().await;
+        if training_guard.is_some() {
+            return Err(McpError::invalid_params(
+                "a training session is already in progress; call browser_train_stop first",
+                None,
+            ));
+        }
+
+        let session_guard = self.session.lock().await;
+        let session = session_guard.as_ref().ok_or_else(no_session_error)?;
+
+        let training = session.train_start(&name).await.map_err(map_engine_err)?;
+        *training_guard = Some(training);
+
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "training started for {name:?}: physically click and type on the page now. \
+             Call browser_train_stop when done (auto-stops after 5 minutes)."
+        ))]))
+    }
+
+    #[tool(
+        description = "Stop the active training session and fit/save a persona from what was captured. Fails if too little was captured to fit."
+    )]
+    async fn browser_train_stop(&self) -> Result<CallToolResult, McpError> {
+        let training = self
+            .training
+            .lock()
+            .await
+            .take()
+            .ok_or_else(|| McpError::invalid_params("no training session is in progress", None))?;
+
+        let stored = training.stop().await.map_err(map_engine_err)?;
+
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "training saved as {:?}: fitted from {} mouse movement(s) and {} keystroke(s). \
+             Use trained_profile: {:?} on browser_click/browser_type to replay it.",
+            stored.name, stored.movements_captured, stored.keystrokes_captured, stored.name
+        ))]))
+    }
+
     #[tool(description = "Close the browser session")]
     async fn browser_close(&self) -> Result<CallToolResult, McpError> {
         let mut guard = self.session.lock().await;
@@ -342,39 +413,49 @@ impl ServerHandler for AibTools {
             .with_server_info(Implementation::from_build_env())
             .with_instructions(
                 "Drives a real Chrome/Edge browser. Tools: browser_navigate(url), \
-                 browser_snapshot(), browser_click(ref, human_like?, persona?, seed?), \
-                 browser_type(ref, text, submit?, human_like?, persona?, seed?), \
+                 browser_snapshot(), browser_click(ref, human_like?, persona?, trained_profile?, seed?), \
+                 browser_type(ref, text, submit?, human_like?, persona?, trained_profile?, seed?), \
                  browser_press(key), browser_wait_for(text, timeout_ms?), browser_screenshot(), \
                  browser_record_start(max_duration_ms?, quality?), browser_record_stop(), \
-                 browser_close(). Refs come from the snapshot text, e.g. `[e6]` -> ref \"e6\". \
-                 Actions do not auto-return a new snapshot; call browser_snapshot again after \
-                 an action that may have changed the page. Use browser_record_start/stop to \
-                 capture a short GIF of moving/animated parts instead of a single screenshot. \
-                 Set human_like: true on browser_click/browser_type to move the mouse along a \
-                 curved path and type character-by-character with human-like pauses instead of \
-                 instant dispatch, e.g. for testing an application's bot-detection; persona is \
-                 one of careful/average/fast (default average), and seed reproduces the exact \
-                 same motion/timing on a later call."
+                 browser_train_start(name), browser_train_stop(), browser_close(). Refs come from \
+                 the snapshot text, e.g. `[e6]` -> ref \"e6\". Actions do not auto-return a new \
+                 snapshot; call browser_snapshot again after an action that may have changed the \
+                 page. Use browser_record_start/stop to capture a short GIF of moving/animated \
+                 parts instead of a single screenshot. Set human_like: true on \
+                 browser_click/browser_type to move the mouse along a curved path and type \
+                 character-by-character with human-like pauses instead of instant dispatch, e.g. \
+                 for testing an application's bot-detection; persona is one of careful/average/fast \
+                 (default average), and seed reproduces the exact same motion/timing on a later \
+                 call. For an even more realistic profile, browser_train_start(name) captures a \
+                 real human physically using the browser (call browser_train_stop when done), then \
+                 pass trained_profile: name (instead of persona) on browser_click/browser_type to \
+                 replay that human's fitted timing with fresh variability each call -- requesting a \
+                 name that was never trained fails with a clear error rather than a silent fallback."
                     .to_string(),
             )
     }
 }
 
-/// Resolves the `human_like`/`persona`/`seed` request fields into an
-/// `engine::HumanLike`, or `None` for the default instant-dispatch path.
-/// Rejects an unknown persona name up front, before any action is taken
-/// (human-motion spec: "Persona presets" — unknown names are a typed error,
-/// never a silent fallback).
+/// Resolves the `human_like`/`persona`/`trained_profile`/`seed` request
+/// fields into an `engine::HumanLike`, or `None` for the default
+/// instant-dispatch path. Specifying `persona` or `trained_profile` implies
+/// human-like mode -- otherwise a caller who set `trained_profile` but left
+/// `human_like` at its default `false` would silently get instant dispatch,
+/// which defeats the point of naming a profile at all. Rejects an unknown
+/// persona name or an untrained profile name up front, before any action is
+/// taken (human-motion spec: "Persona presets" / "Untrained profile fails
+/// clearly" — never a silent fallback).
 fn build_human_like(
     human_like: bool,
     persona: Option<String>,
+    trained_profile: Option<String>,
     seed: Option<u64>,
 ) -> Result<Option<engine::HumanLike>, McpError> {
-    if !human_like {
+    if !human_like && persona.is_none() && trained_profile.is_none() {
         return Ok(None);
     }
-    let persona_name = persona.as_deref().unwrap_or("average");
-    let persona = engine::Session::persona(persona_name).map_err(map_engine_err)?;
+    let persona = engine::Session::persona_or_trained(persona.as_deref(), trained_profile.as_deref())
+        .map_err(map_engine_err)?;
     Ok(Some(engine::HumanLike { persona, seed }))
 }
 
@@ -388,10 +469,10 @@ fn seed_suffix(seed: Option<u64>) -> String {
 fn map_engine_err(e: engine::EngineError) -> McpError {
     use engine::EngineError::*;
     match e {
-        StaleRef(_) | UnknownKey(_) | UnknownPersona(_) => {
+        StaleRef(_) | UnknownKey(_) | UnknownPersona(_) | UntrainedProfile(_) | AmbiguousPersona => {
             McpError::invalid_params(e.to_string(), None)
         }
-        ActionTimeout { .. } | WaitTimeout { .. } | Cdp(_) | Serde(_) | Recording(_) => {
+        ActionTimeout { .. } | WaitTimeout { .. } | Cdp(_) | Serde(_) | Recording(_) | Training(_) => {
             McpError::internal_error(e.to_string(), None)
         }
     }

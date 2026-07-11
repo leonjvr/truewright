@@ -26,6 +26,15 @@ pub enum EngineError {
     #[error("unknown persona: {0:?} (expected one of: careful, average, fast)")]
     UnknownPersona(String),
 
+    #[error("no trained profile named {0:?}; run browser_train_start/browser_train_stop against it first")]
+    UntrainedProfile(String),
+
+    #[error("specify either persona or trained_profile, not both")]
+    AmbiguousPersona,
+
+    #[error("training failed: {0}")]
+    Training(String),
+
     #[error(transparent)]
     Cdp(#[from] cdp::CdpError),
 

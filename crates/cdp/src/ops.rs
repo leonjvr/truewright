@@ -257,6 +257,27 @@ impl Page {
         self.session.events::<E>()
     }
 
+    /// Exposes `window.<name>(payload)` in the page; calls surface as
+    /// `BindingCalled` events on this page's `events::<BindingCalled>()`
+    /// stream (human-motion spec: training capture).
+    pub async fn add_binding(&self, name: &str) -> Result<()> {
+        self.session
+            .execute::<runtime::AddBinding>(runtime::AddBindingParams {
+                name: name.to_string(),
+            })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn remove_binding(&self, name: &str) -> Result<()> {
+        self.session
+            .execute::<runtime::RemoveBinding>(runtime::RemoveBindingParams {
+                name: name.to_string(),
+            })
+            .await?;
+        Ok(())
+    }
+
     pub async fn start_screencast(&self, params: page::StartScreencastParams) -> Result<()> {
         self.session
             .execute::<page::StartScreencast>(params)

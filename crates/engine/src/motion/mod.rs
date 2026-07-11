@@ -4,18 +4,22 @@
 //! `human_like` parameter.
 
 mod path;
+pub mod profile_store;
+pub mod train;
 mod typing;
 
 pub use path::{mouse_path, TimedPoint};
+pub use train::{fit_persona, Sample, Training};
 pub use typing::{typing_timeline, TimedKey};
 
 use rand::SeedableRng;
 use rand_pcg::Pcg64;
+use serde::{Deserialize, Serialize};
 
 /// Timing/jitter parameters for human-like input. A hand-authored preset
-/// (`careful`/`average`/`fast`) or, in a later change, one fitted from a
-/// real human's recorded demonstration — same shape either way.
-#[derive(Debug, Clone, Copy)]
+/// (`careful`/`average`/`fast`) or one fitted from a real human's recorded
+/// demonstration (`motion::train::fit_persona`) — same shape either way.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Persona {
     /// Fitts's-law duration constants: `duration_ms = a + b * log2(distance / target_size + 1)`.
     pub fitts_a_ms: f64,
