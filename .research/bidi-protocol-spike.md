@@ -1,0 +1,33 @@
+# Spike: WebDriver BiDi -- does the protocol trait hold up, and what would BiDi actually buy?
+
+**Date:** 2026-07-11
+**Question:** PROPOSAL.md's Phase 5 roadmap called for a "BiDi spike to validate the protocol trait." This asks it directly: does `aib`'s architecture have a real seam to add WebDriver BiDi (the W3C's newer, browser-vendor-neutral automation protocol) as an alternative to CDP, and what would it concretely gain?
+**Scope note:** this is a research spike, not a shippable feature. No product code changed. Findings are grounded in two live proofs-of-concept against a real installed Chrome, not literature recall alone.
+
+## What was tested
+
+1. Read the actual architecture: `crates/cdp/src/transport.rs`'s `Transport` trait, `crates/cdp/src/connection.rs`'s CDP envelope/flatten-`sessionId` demuxing, `crates/cdp/src/protocol/target.rs`'s target/session vocabulary, and how much of `crates/engine/src/session.rs`'s action-dispatch logic is CDP-specific versus "evaluate JS / dispatch input / screenshot" (a capability shape BiDi also has, under different method names).
+2. **Live-tested whether Chrome speaks BiDi natively.** Launched a real local Chrome (`150.0.7871.114`) with `--remote-debugging-port` and probed `POST /session` directly -- the WebDriver classic New-Session negotiation BiDi tooling uses to obtain a BiDi WebSocket URL. Result: a plain `404`. Chrome's own debugging HTTP server does not expose a WebDriver/BiDi endpoint at all.
+3. **Live-tested the actual reference BiDi client.** Ran `puppeteer-core` launched with `protocol: 'webDriverBiDi'` against the same Chrome binary, with the launched process's own stdout captured (`dumpio: true`). It printed Chrome's completely ordinary `DevTools listening on ws://127.0.0.1:<port>/devtools/browser/<id>` banner -- the exact line `crates/cdp/src/launch.rs`'s `wait_for_devtools_endpoint` already parses. The BiDi session still worked end-to-end (navigated to a real page, read its title) -- but the browser process itself never left plain CDP mode throughout.
+
+## Findings
+
+**Chrome does not natively speak BiDi on the wire.** What's marketed as "Chrome supports BiDi" is, concretely, a client-side translation shim -- the "Mapper," published as the `chromium-bidi` npm package and vendored into Puppeteer/Selenium -- that runs as an ordinary CDP client and re-exposes BiDi's message shapes to callers, still driving Chrome via CDP underneath. This is a materially different picture from "BiDi is an alternative wire protocol Chrome also speaks."
+
+**Consequence:** adding BiDi support *for Chrome* would not reduce this project's CDP surface or dependency at all -- it would mean building (or vendoring) an equivalent CDP→BiDi translation layer, strictly *more* protocol code to own than exists today, not less.
+
+**The one place BiDi is genuinely a different, non-CDP protocol is Firefox** (no CDP support at all beyond a much more limited legacy remote-debugging protocol; BiDi is Firefox's own native implementation). So BiDi's real value proposition for `aib` is specifically "a path to Firefox support," not "a cleaner way to talk to Chrome." **This half is not independently live-verified** -- this development machine has no Firefox or `geckodriver` installed (confirmed via filesystem search), and installing a browser system-wide is outside what a research spike does without being asked. Stated here as a well-documented, but not locally-verified, architectural fact.
+
+**The `Transport` trait is already a genuine, working seam.** `send(String)`/`recv() -> Option<String>`, zero CDP assumptions. Directly reusable, unchanged, for a BiDi connection, since BiDi is also JSON-over-WebSocket.
+
+**The CDP envelope and target/session model are the real friction, and it's contained.** `connection.rs`'s concrete envelope structs (`{id, method, params, sessionId}` / `{id, result}` / `{method, params}`) and flatten-`sessionId` demuxing, plus `target.rs`'s "discover a target, explicitly attach to get a `sessionId`" model (including this project's own deliberate `Target.setDiscoverTargets`-not-`setAutoAttach` choice from `popup-auto-attach`), have no direct BiDi equivalent -- BiDi addresses commands directly in-band via a `context` id, no attach/session-id indirection at all. Real structural friction, but isolated to two files, not smeared through `page.rs`/`runtime.rs`/`input.rs`/`dom.rs`/`fetch.rs`/`network.rs`, whose method/param shapes are just CDP's vocabulary for capabilities BiDi also has under different names.
+
+**Most of `engine/src/session.rs`'s action-dispatch logic is already protocol-capability-shaped, not CDP-specific.** Click/type/press/snapshot/wait_for/screenshot/human-motion pacing reduce to "evaluate JS," "dispatch synthetic input," "capture a screenshot" -- BiDi has direct equivalents (`script.evaluate`, `input.performActions`, `browsingContext.captureScreenshot`). A hypothetical BiDi backend's work would be almost entirely new `crates/cdp`-sibling protocol/connection code, not a rewrite of engine's action logic.
+
+**What's genuinely Chrome/CDP-only and would need real rethinking, not porting, under BiDi:** `cross-origin-oopif`'s frame correlation (`DOM.getFrameOwner`/`resolveNode`/`Runtime.callFunctionOn`, `Target.setDiscoverTargets`'s `iframe`-vs-`page` discrimination) -- BiDi's `browsingContext` tree is unified/flat across origins by design, so this specific mechanism isn't needed the same way, but reaching cross-origin content under BiDi needs its own design against BiDi's actual frame model. `chrome-headless-shell` binary management is orthogonal to the wire protocol either way.
+
+## Recommendation: don't build BiDi support now
+
+The concrete case for it -- Firefox support -- isn't a current project goal, and this project has zero Firefox-specific code today. The only Chrome-facing benefit BiDi was hoped to offer (a less Chrome-specific protocol layer for the browsers already supported) turned out, on live testing, not to exist: Chrome-side BiDi is CDP with a translation layer bolted on, not a genuine alternative.
+
+If Firefox support becomes an actual goal later, this spike's architecture read is the real starting point for scoping it: `Transport` needs no changes; a parallel `crates/cdp`-sibling module (BiDi's own `protocol/` + `Connection`/`Session` equivalent) is the shape of the work; `engine/src/session.rs`'s action-dispatch logic mostly carries over conceptually; OOPIF-style cross-origin frame handling needs a from-scratch design against BiDi's unified `browsingContext` model, not a port of the CDP-specific mechanism `cross-origin-oopif` just shipped.
