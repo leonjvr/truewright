@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Iframe Test</title>
+  <style>
+    body { margin: 0; padding: 40px; }
+    iframe { display: block; border: 2px solid black; width: 300px; height: 200px; margin: 30px 0 30px 60px; }
+  </style>
+</head>
+<body>
+  <h1>Top page</h1>
+  <iframe id="same-origin-frame" title="Same-origin frame" srcdoc="<!doctype html><html><body style='margin:20px'><button id='inner-btn' type='button' onclick=&quot;document.getElementById('status').textContent='Clicked'&quot;>Inner Button</button><p id='status'></p></body></html>"></iframe>
+  <iframe id="cross-origin-frame" title="Cross-origin frame" src="data:text/html,%3Chtml%3E%3Cbody%3E%3Cp%3Eopaque%20origin%3C%2Fp%3E%3C%2Fbody%3E%3C%2Fhtml%3E"></iframe>
+</body>
+</html>

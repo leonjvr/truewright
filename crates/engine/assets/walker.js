@@ -109,8 +109,36 @@
     return ref;
   }
 
+  function walkIframe(el, depth) {
+    var doc = null;
+    try {
+      doc = el.contentDocument;
+    } catch (e) {
+      doc = null;
+    }
+
+    if (!doc) {
+      return {
+        tag: 'iframe',
+        role: 'iframe',
+        name: 'cross-origin iframe (not inspectable): ' + (el.getAttribute('src') || ''),
+        children: [],
+      };
+    }
+    if (!doc.body) {
+      return { tag: 'iframe', role: 'iframe', name: 'iframe not yet loaded', children: [] };
+    }
+
+    var child = walk(doc.body, depth + 1);
+    var out = { tag: 'iframe', role: 'iframe', children: child ? [child] : [] };
+    var title = el.getAttribute('title');
+    if (title) out.name = title;
+    return out;
+  }
+
   function walk(el, depth) {
     if (depth > 40 || el.nodeType !== 1 || SKIP_TAGS.has(el.tagName)) return null;
+    if (el.tagName === 'IFRAME') return walkIframe(el, depth);
 
     var interactive = INTERACTIVE_TAGS.has(el.tagName) || el.hasAttribute('role') || typeof el.onclick === 'function';
     var structural = STRUCTURAL_TAGS.has(el.tagName);
