@@ -43,18 +43,21 @@ async fn console_and_exception_capture_produces_a_chronological_jsonl_trace() {
 
     let summary = capture.stop().await.expect("console capture stops");
     assert_eq!(summary.name, "console-flow-test");
-    assert_eq!(
-        summary.entry_count, 4,
-        "expected 3 console calls + 1 uncaught exception"
-    );
+    // 3 console calls + 1 uncaught exception + 1 navigate action entry
+    // (the `navigate` call above is itself logged into this same trace, per
+    // the action-trace change -- see action_trace_flow.rs for that
+    // behavior's own dedicated coverage; this test cares about the
+    // console/exception entries specifically, so it filters those out).
+    assert_eq!(summary.entry_count, 5);
 
     let raw = std::fs::read_to_string(&summary.path).expect("read trace file");
     let entries: Vec<serde_json::Value> = raw
         .lines()
         .filter(|l| !l.trim().is_empty())
         .map(|l| serde_json::from_str(l).expect("valid JSON line"))
+        .filter(|e: &serde_json::Value| e["type"] != "action")
         .collect();
-    assert_eq!(entries.len(), 4, "trace file should have one line per entry");
+    assert_eq!(entries.len(), 4, "trace file should have one console/exception entry per call");
 
     assert_eq!(entries[0]["type"], "console");
     assert_eq!(entries[0]["level"], "log");

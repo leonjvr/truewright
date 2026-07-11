@@ -38,6 +38,11 @@ pub struct Session {
     /// are themselves `isTrusted`, so this flag, not `isTrusted`, is the
     /// actual guard).
     training_active: Arc<AtomicBool>,
+    /// Reference to the currently-active console/action trace's entry
+    /// buffer, if any (action-trace spec). Action methods check this
+    /// before appending a summary entry -- a no-op when no trace is
+    /// active.
+    action_trace_sink: crate::console::ActionTraceSink,
 }
 
 /// Requests a human-like (curved mouse path / paced typing cadence) variant
@@ -103,6 +108,7 @@ impl Session {
             page,
             mouse_pos: Mutex::new((0.0, 0.0)),
             training_active: Arc::new(AtomicBool::new(false)),
+            action_trace_sink: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -212,10 +218,23 @@ impl Session {
     /// current page (console-capture spec). `ConsoleCapture::stop` finishes
     /// and persists the JSONL trace under `name`.
     pub async fn console_capture_start(&self, name: &str) -> Result<crate::console::ConsoleCapture> {
-        crate::console::ConsoleCapture::start(&self.page, name).await
+        crate::console::ConsoleCapture::start(&self.page, name, self.action_trace_sink.clone()).await
+    }
+
+    /// Appends a one-line summary to the active trace, if any (action-trace
+    /// spec: "Action entries interleaved into the active trace"). A no-op
+    /// when no trace is active.
+    async fn log_action(&self, text: String) {
+        if let Some(sink) = self.action_trace_sink.lock().await.as_ref() {
+            sink.lock().await.push(crate::console::TraceEntry::Action {
+                text,
+                timestamp_ms: crate::console::now_ms(),
+            });
+        }
     }
 
     pub async fn navigate(&self, url: &str) -> Result<String> {
+        self.log_action(format!("navigate {url}")).await;
         self.page.navigate_and_wait(url, NAVIGATE_TIMEOUT).await?;
         self.snapshot().await
     }
@@ -240,6 +259,7 @@ impl Session {
     /// target"). Returns the seed used, if human-like mode was requested, so
     /// the run can be reproduced.
     pub async fn click_with(&self, r#ref: &str, human: Option<HumanLike>) -> Result<Option<u64>> {
+        self.log_action(format!("click {ref}")).await;
         let suppress = self.begin_training_suppression().await;
         let result = self.click_dispatch(r#ref, human).await;
         self.end_training_suppression(suppress).await;
@@ -265,6 +285,7 @@ impl Session {
         submit: bool,
         human: Option<HumanLike>,
     ) -> Result<Option<u64>> {
+        self.log_action(format!("type {ref} {text:?}")).await;
         // Suppressed once for the whole action (focus-click + typing +
         // optional submit), not per sub-step -- sub-steps below call the
         // unwrapped `_dispatch` variants so the suppress flag isn't
@@ -276,6 +297,7 @@ impl Session {
     }
 
     pub async fn press(&self, key: &str) -> Result<()> {
+        self.log_action(format!("press {key}")).await;
         let suppress = self.begin_training_suppression().await;
         let result = self.press_dispatch(key).await;
         self.end_training_suppression(suppress).await;

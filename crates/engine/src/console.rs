@@ -9,7 +9,7 @@ use cdp::session::EventItem;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 
@@ -29,7 +29,18 @@ pub enum TraceEntry {
         text: String,
         timestamp_ms: f64,
     },
+    Action {
+        text: String,
+        timestamp_ms: f64,
+    },
 }
+
+/// A reference to the currently-active trace's shared entry buffer, or
+/// `None` if no trace is active (action-trace spec: "Action entries
+/// interleaved into the active trace"). `Session` holds one of these and
+/// checks it before appending an action entry, so tracing costs nothing
+/// when inactive.
+pub type ActionTraceSink = Arc<Mutex<Option<Arc<Mutex<Vec<TraceEntry>>>>>>;
 
 pub struct ConsoleCaptureSummary {
     pub name: String,
@@ -43,13 +54,16 @@ pub struct ConsoleCaptureSummary {
 pub struct ConsoleCapture {
     name: String,
     entries: Arc<Mutex<Vec<TraceEntry>>>,
+    action_sink: ActionTraceSink,
     stop_tx: Option<oneshot::Sender<()>>,
     collector: JoinHandle<()>,
 }
 
 impl ConsoleCapture {
-    pub(crate) async fn start(page: &Page, name: &str) -> Result<Self> {
+    pub(crate) async fn start(page: &Page, name: &str, action_sink: ActionTraceSink) -> Result<Self> {
         let entries = Arc::new(Mutex::new(Vec::new()));
+        *action_sink.lock().await = Some(entries.clone());
+
         let (stop_tx, stop_rx) = oneshot::channel();
         let collector = tokio::spawn(collect_console(
             page.clone(),
@@ -61,6 +75,7 @@ impl ConsoleCapture {
         Ok(Self {
             name: name.to_string(),
             entries,
+            action_sink,
             stop_tx: Some(stop_tx),
             collector,
         })
@@ -74,6 +89,12 @@ impl ConsoleCapture {
             let _ = tx.send(());
         }
         let _ = (&mut self.collector).await;
+
+        // Clear the sink before draining, so an action call racing this
+        // stop either lands its entry before the take (captured) or sees
+        // `None` afterward (skipped) -- never appends into a buffer nobody
+        // reads again (design.md Decisions #2/#3).
+        *self.action_sink.lock().await = None;
 
         let entries = std::mem::take(&mut *self.entries.lock().await);
         let entry_count = entries.len();
@@ -140,6 +161,17 @@ async fn collect_console(
             }
         }
     }
+}
+
+/// Epoch milliseconds, matching CDP's own `Runtime` event timestamp
+/// convention (design.md Decision #4) so action entries interleave
+/// correctly with console/exception entries by real time.
+pub fn now_ms() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+        * 1000.0
 }
 
 /// Best-effort string rendering of a console argument: prefer the
