@@ -31,7 +31,8 @@ An LLM-first browser-testing engine: a single Rust binary that drives your insta
 - **Cross-origin OOPIF content (Phase 5) — done.** A cross-origin `<iframe>` that Chrome has isolated into its own process (a real Out-Of-Process IFrame, common for third-party widgets like payment/auth embeds) now shows its actual content in `browser_snapshot` instead of the "not inspectable" placeholder — same-origin-iframes' fallback still applies for cross-origin iframes Chrome *didn't* isolate (e.g. an opaque-origin `data:` URL, which never gets its own process). Discovery/attach reuses the same browser-wide discover-and-explicit-attach mechanism already proven for popups; `DOM.getFrameOwner`/`DOM.resolveNode`/`Runtime.callFunctionOn` (new CDP protocol surface) correlate an OOPIF target back to the exact `<iframe>` element the walker already assigned a ref to, letting its content be spliced in with namespaced refs (`f1:e3`) so they can't collide with the top page's own. `browser_click`/`browser_type` on those refs land correctly by composing two already-existing, unmodified pieces: `resolve.js`'s local answer inside the OOPIF's own session (its ancestor-walk loop already stops correctly at a cross-origin boundary, no code change needed there) plus the OOPIF's own on-screen position from its already-correlated top-level ref. A real bug was found and fixed during implementation: the original plan to scope correlation via `Page.getFrameTree` doesn't work, since that command only reports frames within its own target's renderer process — a genuine OOPIF is invisible to it by construction; fixed by relying on `DOM.getFrameOwner` succeeding as the scope check instead, which needs no separate pre-filtering step at all. Verified against a real forced OOPIF (two distinct `.localhost` subdomains, `--site-per-process`) on host and in the Docker container: the OOPIF's actual content appears in the snapshot, and clicking its namespaced ref actually fires its own click handler.
 - **BiDi protocol spike (Phase 5) — research complete, no shipped code.** Investigated WebDriver BiDi as a possible alternative to CDP. Live-tested, not assumed: Chrome's own debugging port has no WebDriver/BiDi endpoint (`POST /session` returns `404`), and the reference BiDi client (`puppeteer-core`) launches Chrome in ordinary CDP mode and translates BiDi↔CDP client-side — Chrome doesn't natively speak BiDi. Recommendation: don't build BiDi support now; its one real non-CDP use case is Firefox, which isn't a current goal. Full findings: `.research/bidi-protocol-spike.md`.
 - **LLM providers (Phase 6, agent harness 1/4) — done.** New `crates/llm`: a provider-agnostic OpenAI-compatible chat-completions client (text/image content, function-calling tools, 429/5xx retry) that DeepSeek/MiniMax/GLM/Grok/OpenAI all speak identically, plus `<data-dir>/aib/config.toml` (`[providers.*]`/`[roles.*]`, four-way path resolution, a missing file is a valid empty config so browser-only tools never break). `aib llm ping <role>` resolves a configured role and sends one real completion — the live-verification hook, and a standalone connectivity check. First of four changes building `aib`'s own agent harness (multi-provider LLM driving its own browser session); OAuth/subscription auth, the driving loop, and MCP delegation are the next three. Verified against a real local HTTP server (not just serialized-shape assertions) for the retry/auth-header behavior, plus a manual end-to-end CLI smoke test against a real local stub.
-- **Next:** `oauth-subscription-auth` (PKCE flow for ChatGPT-subscription access, token store, `aib auth login/status/logout`), then `agent-harness` (the actual `aib agent "task"` driving loop), then `mcp-task-delegation` (`browser_run_task`, screenshot vision-interpretation).
+- **OAuth/subscription auth (Phase 6, agent harness 2/4) — done, backend not independently verified.** `aib auth login <flow>` / `status` / `logout` support subscription-based providers alongside plain API keys — currently OpenAI's ChatGPT Plus/Pro/Team/Enterprise subscription, via the same PKCE authorization-code flow (and the same `chatgpt.com/backend-api/codex` Responses-API backend) OpenAI's own open-source Codex CLI uses. Every endpoint/header/client-id constant was verified directly against `openai/codex`'s own source, not third-party writeups — which caught two easy-to-miss real details: the initial code exchange is form-encoded but refresh is JSON-encoded, and token expiry comes from the `id_token` JWT's own `exp` claim (the token endpoint's response has no separate `expires_in` field). A real bug was found and fixed before shipping: stored tokens were looked up by the config's provider name instead of the OAuth flow's own id, silently broken whenever they weren't identical — caught by a test deliberately using different names for the two, since every other test's coincidental name-matching hid it. Every HTTP-shaped piece (token exchange/refresh, the local callback listener, SSE response aggregation) is verified against a real local server or socket, not hand-built JSON fed straight to a parser. **What's not independently verified:** the real `auth.openai.com`/`chatgpt.com` endpoints — that needs a human clicking through OpenAI's real consent screen with a real subscription, deliberately left as a manual, user-assisted step rather than assumed to work.
+- **Next:** `agent-harness` (the actual `aib agent "task"` driving loop), then `mcp-task-delegation` (`browser_run_task`, screenshot vision-interpretation).
 
 ## MCP server
 
@@ -219,6 +220,35 @@ Captures a short video of the page via CDP's screencast API — for verifying an
 - Frames are captured at 480×360, every 3rd repaint, JPEG quality 60 by default — kept small on purpose; this is a "did it move correctly" check, not pixel-perfect capture.
 - `browser_record_stop` writes the JPEG frame sequence and a `manifest.json` (real per-frame timestamps) to `<data-dir>/aib/recordings/<id>/`, assembles `clip.gif` from them (delays derived from the real timestamps, not a fixed rate), and returns the directory path, frame count, duration, and one preview frame as inline image content.
 - **GIF only — no WebM/MP4.** Neither the host nor `docker/Dockerfile`'s test image has `ffmpeg` available, and this project doesn't ship encoding paths it hasn't actually run (see `openspec/changes/archive/*-screencast-capture/design.md`).
+
+## LLM provider config (`<data-dir>/aib/config.toml`)
+
+The foundation for `aib`'s own agent harness (see Status above — the driving loop itself isn't shipped yet, but the provider/auth layer it's built on is usable standalone today via `aib llm ping`). Config file resolution order: `--config <path>` → `AIB_CONFIG` env var → project-local `./aib.toml` → `<data-dir>/aib/config.toml`. A missing file is a valid empty config — nothing here is required for the browser tools to work.
+
+```toml
+[providers.deepseek]
+kind = "openai-compat"                  # any OpenAI-compatible /chat/completions endpoint
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"        # or: api_key = "sk-..." (literal, in the file)
+
+[providers.chatgpt]
+kind = "openai-responses"               # OpenAI's Responses API shape (ChatGPT-subscription backend)
+oauth_flow = "chatgpt"                  # auth via `aib auth login chatgpt`, not a key
+
+[roles.driver]
+provider = "deepseek"
+model = "deepseek-chat"
+vision = false
+```
+
+```
+aib llm ping driver             # resolves the "driver" role and sends one real completion
+aib auth login chatgpt          # PKCE browser login for a subscription-based provider
+aib auth status                 # lists stored logins and their expiry
+aib auth logout chatgpt         # deletes stored tokens for a flow
+```
+
+`aib auth login`'s ChatGPT flow uses the same `auth.openai.com` PKCE flow and `chatgpt.com/backend-api/codex` backend OpenAI's own open-source Codex CLI uses — unofficial, interoperable-client territory (not a published integration surface), so it can drift if OpenAI changes it. `aib` sends its own `originator` header rather than impersonating Codex's client identity.
 
 ## Testing in Docker
 

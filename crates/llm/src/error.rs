@@ -51,6 +51,43 @@ pub enum LlmError {
         #[source]
         source: reqwest::Error,
     },
+
+    #[error("failed to read token store file {path}: {source}")]
+    TokenStoreIo {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse stored tokens at {path}: {source}")]
+    TokenStoreParse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+
+    #[error("unknown OAuth flow {0:?}")]
+    UnknownOAuthFlow(String),
+
+    #[error("no stored login for provider {0:?} -- run `aib auth login {0}`")]
+    NotLoggedIn(String),
+
+    #[error("OAuth login for {provider:?} failed: {reason}")]
+    OAuthLoginFailed { provider: String, reason: String },
+
+    #[error(
+        "OAuth callback state mismatch -- the login link may be stale; run `aib auth login` again"
+    )]
+    OAuthStateMismatch,
+
+    #[error("refreshing the OAuth token for {provider:?} failed: {reason} -- run `aib auth login {provider}` again")]
+    OAuthRefreshFailed { provider: String, reason: String },
+
+    #[error("local OAuth callback server failed: {0}")]
+    OAuthCallbackServer(String),
+
+    #[error("SSE stream from {url} ended without a completed response event")]
+    SseIncomplete { url: String },
 }
 
 pub type Result<T> = std::result::Result<T, LlmError>;

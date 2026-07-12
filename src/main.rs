@@ -84,6 +84,26 @@ enum Command {
         #[command(subcommand)]
         action: LlmCommand,
     },
+    /// OAuth login for subscription-based LLM providers (e.g. a ChatGPT
+    /// subscription instead of a platform API key) (oauth-subscription-auth
+    /// spec).
+    Auth {
+        #[command(subcommand)]
+        action: AuthCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuthCommand {
+    /// Runs the OAuth login flow for `flow` (currently just "chatgpt"):
+    /// prints (and best-effort opens) a sign-in URL, waits for the
+    /// browser redirect on a local callback server, and stores the
+    /// resulting tokens under `<data-dir>/aib/auth/<flow>.json`.
+    Login { flow: String },
+    /// Lists every provider with stored tokens and their expiry.
+    Status,
+    /// Deletes the stored tokens for `flow`, if any.
+    Logout { flow: String },
 }
 
 #[derive(Subcommand)]
@@ -162,6 +182,11 @@ async fn main() -> std::process::ExitCode {
         Command::Llm { action } => match action {
             LlmCommand::Ping { role, config } => llm_ping(&role, config).await,
         },
+        Command::Auth { action } => match action {
+            AuthCommand::Login { flow } => auth_login(&flow).await,
+            AuthCommand::Status => auth_status(),
+            AuthCommand::Logout { flow } => auth_logout(&flow),
+        },
     }
 }
 
@@ -169,8 +194,8 @@ async fn main() -> std::process::ExitCode {
 /// model/latency/reply -- the live-verification hook for the llm-providers
 /// change (no browser session involved at all).
 async fn llm_ping(role: &str, config_path: Option<PathBuf>) -> std::process::ExitCode {
-    let aib_data_dir = match cdp::launch::profile_base_dir() {
-        Ok(dir) => dir.join("aib"),
+    let aib_data_dir = match resolve_aib_data_dir() {
+        Ok(dir) => dir,
         Err(e) => {
             eprintln!("failed to resolve per-user data directory: {e}");
             return std::process::ExitCode::FAILURE;
@@ -212,6 +237,104 @@ async fn llm_ping(role: &str, config_path: Option<PathBuf>) -> std::process::Exi
         }
         Err(e) => {
             eprintln!("ping failed: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// `<data-dir>/aib`, the same per-user directory every other `aib`
+/// subsystem uses (profiles, traces, recordings) -- OAuth tokens live at
+/// `<this>/auth/<flow>.json`.
+// CdpError is kept as one flat enum (matches its own design.md Decision
+// #5); boxing it here too would ripple through call sites for marginal
+// benefit at this size.
+#[allow(clippy::result_large_err)]
+fn resolve_aib_data_dir() -> cdp::error::Result<PathBuf> {
+    cdp::launch::profile_base_dir().map(|dir| dir.join("aib"))
+}
+
+/// Runs the OAuth login flow and prints the outcome. The flow itself
+/// prints the sign-in URL and best-effort opens it; this just reports
+/// success/failure once the browser redirect completes.
+async fn auth_login(flow: &str) -> std::process::ExitCode {
+    let aib_data_dir = match resolve_aib_data_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("failed to resolve per-user data directory: {e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let store = llm::TokenStore::new(aib_data_dir.join("auth"));
+
+    match llm::oauth_login(flow, &store).await {
+        Ok(tokens) => {
+            println!("Signed in to {flow}.");
+            if let Some(account_id) = &tokens.account_id {
+                println!("Account: {account_id}");
+            }
+            std::process::ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("login failed: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn auth_status() -> std::process::ExitCode {
+    let aib_data_dir = match resolve_aib_data_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("failed to resolve per-user data directory: {e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let store = llm::TokenStore::new(aib_data_dir.join("auth"));
+
+    let flows = store.list();
+    if flows.is_empty() {
+        println!("No stored logins. Run `aib auth login <flow>` (e.g. `aib auth login chatgpt`).");
+        return std::process::ExitCode::SUCCESS;
+    }
+    for flow in flows {
+        match store.load(&flow) {
+            Ok(Some(tokens)) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let status = if tokens.expires_at_epoch_s > now {
+                    format!("expires in {}s", tokens.expires_at_epoch_s - now)
+                } else {
+                    "expired (will refresh on next use)".to_string()
+                };
+                let account = tokens.account_id.as_deref().unwrap_or("(no account id)");
+                println!("{flow}: {account} -- {status}");
+            }
+            Ok(None) => println!("{flow}: (no longer present)"),
+            Err(e) => println!("{flow}: error reading stored tokens: {e}"),
+        }
+    }
+    std::process::ExitCode::SUCCESS
+}
+
+fn auth_logout(flow: &str) -> std::process::ExitCode {
+    let aib_data_dir = match resolve_aib_data_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("failed to resolve per-user data directory: {e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let store = llm::TokenStore::new(aib_data_dir.join("auth"));
+
+    match store.delete(flow) {
+        Ok(()) => {
+            println!("Signed out of {flow}.");
+            std::process::ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("logout failed: {e}");
             std::process::ExitCode::FAILURE
         }
     }

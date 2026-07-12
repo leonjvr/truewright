@@ -1,16 +1,19 @@
 //! Config loading and role resolution (llm-providers spec: "Config file
-//! loading", "Role resolution"). A missing config file is a valid, empty
+//! loading", "Role resolution"; oauth-subscription-auth spec: "OAuth
+//! provider config"). A missing config file is a valid, empty
 //! configuration -- `aib`'s browser tools must keep working with no LLM
 //! setup at all; only agent-facing commands need roles resolved, and they
 //! fail with a clear, specific error at that point instead.
 
-use crate::auth::CredentialSource;
-use crate::client::{not_yet_implemented, Client, RoleClient};
+use crate::auth::{CredentialSource, TokenStore};
+use crate::client::{Client, RoleClient};
 use crate::client_compat::CompatClient;
+use crate::client_responses::{ResponsesClient, CHATGPT_CODEX_BASE_URL};
 use crate::error::{LlmError, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum ProviderKind {
@@ -25,15 +28,6 @@ pub enum ProviderKind {
     OpenAiResponses,
 }
 
-impl ProviderKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            ProviderKind::OpenAiCompat => "openai-compat",
-            ProviderKind::OpenAiResponses => "openai-responses",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProviderConfig {
     pub kind: ProviderKind,
@@ -43,6 +37,11 @@ pub struct ProviderConfig {
     pub api_key: Option<String>,
     #[serde(default)]
     pub api_key_env: Option<String>,
+    /// Which `OAuthFlowSpec` (by id, e.g. `"chatgpt"`) this provider
+    /// authenticates through -- checked after `api_key`/`api_key_env`
+    /// (oauth-subscription-auth spec: "OAuth provider config").
+    #[serde(default)]
+    pub oauth_flow: Option<String>,
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
 }
@@ -110,18 +109,21 @@ pub struct Config {
     roles: BTreeMap<String, RoleConfig>,
     pub agent: AgentSettings,
     pub skills: SkillsConfig,
+    token_store: Arc<TokenStore>,
 }
 
 impl Config {
     /// Empty configuration -- no providers, no roles. Valid; every
     /// browser-only code path keeps working. `resolve_role` on this always
-    /// returns `UnknownRole`.
-    pub fn empty() -> Self {
+    /// returns `UnknownRole`. `aib_data_dir` is still needed to give the
+    /// (unused, since there are no providers) token store a real path.
+    pub fn empty(aib_data_dir: &Path) -> Self {
         Self {
             providers: BTreeMap::new(),
             roles: BTreeMap::new(),
             agent: AgentSettings::default(),
             skills: SkillsConfig::default(),
+            token_store: Arc::new(TokenStore::new(aib_data_dir.join("auth"))),
         }
     }
 
@@ -130,8 +132,9 @@ impl Config {
     /// local) -> `<aib_data_dir>/config.toml`. `aib_data_dir` is the
     /// caller's already-resolved `<data-dir>/aib` (matching every other
     /// per-user path in this project, e.g. `cdp::launch::profile_base_dir`
-    /// callers). A missing file at the resolved path is not an error --
-    /// see `Config::empty`.
+    /// callers) -- also where OAuth tokens are stored, under `auth/`. A
+    /// missing file at the resolved path is not an error -- see
+    /// `Config::empty`.
     #[allow(clippy::result_large_err)]
     pub fn load(aib_data_dir: &Path, explicit_path: Option<&Path>) -> Result<Self> {
         let path = if let Some(p) = explicit_path {
@@ -145,7 +148,7 @@ impl Config {
         };
 
         if !path.is_file() {
-            return Ok(Config::empty());
+            return Ok(Config::empty(aib_data_dir));
         }
 
         let text = std::fs::read_to_string(&path).map_err(|source| LlmError::ConfigRead {
@@ -160,6 +163,7 @@ impl Config {
             roles: raw.roles,
             agent: raw.agent,
             skills: raw.skills,
+            token_store: Arc::new(TokenStore::new(aib_data_dir.join("auth"))),
         })
     }
 
@@ -193,7 +197,7 @@ impl Config {
                             role: name.to_string(),
                             provider: role.provider.clone(),
                         })?;
-                let credential = resolve_credential(provider, &role.provider)?;
+                let credential = self.resolve_credential(provider, &role.provider)?;
                 Client::Compat(CompatClient::new(
                     base_url,
                     credential,
@@ -201,7 +205,12 @@ impl Config {
                 ))
             }
             ProviderKind::OpenAiResponses => {
-                return Err(not_yet_implemented(ProviderKind::OpenAiResponses.as_str()));
+                let base_url = provider
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| CHATGPT_CODEX_BASE_URL.to_string());
+                let credential = self.resolve_credential(provider, &role.provider)?;
+                Client::Responses(ResponsesClient::new(base_url, credential))
             }
         };
 
@@ -218,23 +227,34 @@ impl Config {
     pub fn has_role(&self, name: &str) -> bool {
         self.roles.contains_key(name)
     }
-}
 
-#[allow(clippy::result_large_err)]
-fn resolve_credential(provider: &ProviderConfig, provider_name: &str) -> Result<CredentialSource> {
-    if let Some(key) = &provider.api_key {
-        return Ok(CredentialSource::Static(key.clone()));
-    }
-    if let Some(var) = &provider.api_key_env {
-        let key = std::env::var(var).map_err(|_| LlmError::MissingCredential {
+    #[allow(clippy::result_large_err)]
+    fn resolve_credential(
+        &self,
+        provider: &ProviderConfig,
+        provider_name: &str,
+    ) -> Result<CredentialSource> {
+        if let Some(key) = &provider.api_key {
+            return Ok(CredentialSource::Static(key.clone()));
+        }
+        if let Some(var) = &provider.api_key_env {
+            let key = std::env::var(var).map_err(|_| LlmError::MissingCredential {
+                provider: provider_name.to_string(),
+                env_var: var.clone(),
+            })?;
+            return Ok(CredentialSource::Static(key));
+        }
+        if let Some(flow_id) = &provider.oauth_flow {
+            return Ok(CredentialSource::OAuth {
+                provider: provider_name.to_string(),
+                flow_id: flow_id.clone(),
+                store: self.token_store.clone(),
+            });
+        }
+        Err(LlmError::NoCredentialConfigured {
             provider: provider_name.to_string(),
-            env_var: var.clone(),
-        })?;
-        return Ok(CredentialSource::Static(key));
+        })
     }
-    Err(LlmError::NoCredentialConfigured {
-        provider: provider_name.to_string(),
-    })
 }
 
 #[cfg(test)]
@@ -348,13 +368,13 @@ mod tests {
     }
 
     #[test]
-    fn openai_responses_provider_is_not_yet_implemented() {
+    fn openai_responses_provider_resolves_to_a_responses_client() {
         let path = write_temp_toml(
-            "responses-nyi",
+            "responses-ok",
             r#"
                 [providers.chatgpt]
                 kind = "openai-responses"
-                api_key = "unused-in-this-change"
+                oauth_flow = "chatgpt"
 
                 [roles.driver]
                 provider = "chatgpt"
@@ -364,10 +384,10 @@ mod tests {
         let config = Config::load(&PathBuf::from("unused"), Some(&path)).expect("config parses");
         std::fs::remove_file(&path).ok();
 
-        assert!(matches!(
-            config.resolve_role("driver"),
-            Err(LlmError::NotYetImplemented { kind }) if kind == "openai-responses"
-        ));
+        let role = config
+            .resolve_role("driver")
+            .expect("responses role resolves");
+        assert!(matches!(role.client, Client::Responses(_)));
     }
 
     // AIB_CHROME_PATH-style lesson from this project's own history: env-var

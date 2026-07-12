@@ -10,11 +10,20 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+base64.workspace = true
+rand.workspace = true
+futures-util.workspace = true
 # rustls (not the workspace default TLS-less feature set): this crate makes
 # real HTTPS calls to LLM providers, which the root binary's own reqwest
-# dev-dependency (local-HTTP MCP test client only) never needs.
-reqwest = { workspace = true, features = ["rustls"] }
+# dev-dependency (local-HTTP MCP test client only) never needs. `stream`:
+# the ChatGPT-subscription backend (oauth-subscription-auth) is
+# effectively SSE-only; `ResponsesClient` consumes it as a byte stream.
+# `form`: the OAuth code exchange is form-encoded (the refresh call is
+# JSON instead -- a real asymmetry in OpenAI's own token endpoint).
+reqwest = { workspace = true, features = ["rustls", "stream", "form"] }
 toml = "0.8"
+# PKCE's S256 code challenge (RFC 7636) -- a real SHA-256, not hand-rolled.
+sha2 = "0.10"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "rt", "macros"] }
