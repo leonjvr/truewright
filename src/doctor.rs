@@ -1,4 +1,4 @@
-//! `aib doctor` — attach→navigate→evaluate→screenshot self-check plus
+//! `truewright doctor` — attach→navigate→evaluate→screenshot self-check plus
 //! command round-trip latency, against every discovered browser
 //! (openspec/changes/phase-0-cdp-spike/specs/doctor-cli/spec.md).
 
@@ -134,7 +134,7 @@ fn report_discovery_failure(json: bool, error: &cdp::CdpError) {
             serde_json::to_string_pretty(&report).expect("report is serializable")
         );
     } else {
-        eprintln!("aib doctor: {error}");
+        eprintln!("truewright doctor: {error}");
     }
 }
 

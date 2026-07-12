@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 /// Everything `browser_run_task`/`browser_screenshot(interpret: true)` need:
 /// a driver (and optional vision) role resolved into a `Harness`, plus the
 /// directories `skills` request params resolve against -- bundled into one
-/// type rather than two independent `Option`s on `AibTools` so "no LLM
+/// type rather than two independent `Option`s on `TruewrightTools` so "no LLM
 /// configured" and "LLM configured" stay the only two reachable states
 /// (mcp-task-delegation design.md Decision #1).
 #[derive(Clone)]
@@ -21,7 +21,7 @@ pub struct AgentConfig {
     pub skill_dirs: Vec<PathBuf>,
 }
 
-/// Lower than `aib agent`'s own config-driven default (typically 40) --
+/// Lower than `truewright agent`'s own config-driven default (typically 40) --
 /// a delegated task is more likely to run inside an outer MCP host's own
 /// tool-call timeout budget than a human watching a terminal
 /// (mcp-task-delegation design.md Decision #3).
@@ -251,7 +251,7 @@ pub struct RunTaskRequest {
     pub guidance: Option<String>,
     #[serde(default)]
     #[schemars(
-        description = "Skill names to attach, resolved the same way as `aib agent --skill`"
+        description = "Skill names to attach, resolved the same way as `truewright agent --skill`"
     )]
     pub skills: Vec<String>,
     #[serde(default)]
@@ -260,7 +260,7 @@ pub struct RunTaskRequest {
 }
 
 #[derive(Clone)]
-pub struct AibTools {
+pub struct TruewrightTools {
     session: Arc<Mutex<Option<engine::Session>>>,
     recording: Arc<Mutex<Option<engine::Recording>>>,
     training: Arc<Mutex<Option<engine::Training>>>,
@@ -269,7 +269,7 @@ pub struct AibTools {
     console_capture: Arc<Mutex<Option<engine::ConsoleCapture>>>,
     headless: bool,
     browser_pref: cdp::launch::BrowserPreference,
-    /// The `Session::launch` profile-directory name. Fixed at `"aib-mcp"`
+    /// The `Session::launch` profile-directory name. Fixed at `"truewright-mcp"`
     /// for stdio (one process, one profile, never a collision risk);
     /// streamable-HTTP mode gives each session its own randomly-suffixed
     /// name instead, since multiple concurrent sessions could otherwise
@@ -284,21 +284,21 @@ pub struct AibTools {
     // Read by the `#[tool_handler]`-generated `ServerHandler` impl to route
     // incoming `tools/call` requests to the methods below.
     #[allow(dead_code)]
-    tool_router: ToolRouter<AibTools>,
+    tool_router: ToolRouter<TruewrightTools>,
 }
 
 #[tool_router]
-impl AibTools {
+impl TruewrightTools {
     pub fn new(headless: bool) -> Self {
         Self::with_browser_pref(headless, cdp::launch::BrowserPreference::Auto)
     }
 
     pub fn with_browser_pref(headless: bool, browser_pref: cdp::launch::BrowserPreference) -> Self {
-        Self::with_profile_name(headless, browser_pref, "aib-mcp".to_string())
+        Self::with_profile_name(headless, browser_pref, "truewright-mcp".to_string())
     }
 
     /// As `with_browser_pref`, but with an explicit profile-directory name
-    /// instead of the fixed `"aib-mcp"` default -- used by streamable-HTTP
+    /// instead of the fixed `"truewright-mcp"` default -- used by streamable-HTTP
     /// mode to give each session its own isolated profile.
     pub fn with_profile_name(
         headless: bool,
@@ -351,7 +351,7 @@ impl AibTools {
     ) -> Result<String, McpError> {
         let agent_config = self.agent.as_ref().ok_or_else(|| {
             McpError::invalid_params(
-                "no vision role configured; set [roles.vision] in aib's config.toml",
+                "no vision role configured; set [roles.vision] in truewright's config.toml",
                 None,
             )
         })?;
@@ -981,7 +981,7 @@ impl AibTools {
     }
 
     #[tool(
-        description = "Delegate a whole sub-task to aib's own configured LLM driver, which autonomously drives THIS session's browser (navigate/click/type/snapshot/assert/etc.) until it signals completion or failure. Runs on the same session as every other browser_* tool -- don't call other browser_* tools while this is running. Requires [roles.driver] configured in aib's config.toml; fails with a clear invalid-params error if none is configured. Returns a compact step transcript followed by the outcome; a failed task is a tool-level error result, like browser_assert."
+        description = "Delegate a whole sub-task to truewright's own configured LLM driver, which autonomously drives THIS session's browser (navigate/click/type/snapshot/assert/etc.) until it signals completion or failure. Runs on the same session as every other browser_* tool -- don't call other browser_* tools while this is running. Requires [roles.driver] configured in truewright's config.toml; fails with a clear invalid-params error if none is configured. Returns a compact step transcript followed by the outcome; a failed task is a tool-level error result, like browser_assert."
     )]
     async fn browser_run_task(
         &self,
@@ -994,7 +994,7 @@ impl AibTools {
     ) -> Result<CallToolResult, McpError> {
         let agent_config = self.agent.as_ref().ok_or_else(|| {
             McpError::invalid_params(
-                "no agent driver configured; set [roles.driver] in aib's config.toml (see `aib llm ping driver`)",
+                "no agent driver configured; set [roles.driver] in truewright's config.toml (see `truewright llm ping driver`)",
                 None,
             )
         })?;
@@ -1076,7 +1076,7 @@ impl AibTools {
 }
 
 #[tool_handler]
-impl ServerHandler for AibTools {
+impl ServerHandler for TruewrightTools {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::from_build_env())
@@ -1162,7 +1162,7 @@ impl ServerHandler for AibTools {
                  tool-level error like browser_assert. Set interpret: true on browser_screenshot or \
                  browser_record_stop to get a text description from the configured vision role instead \
                  of the raw image, for a caller with no vision of its own; omitting it keeps returning \
-                 the image exactly as before. Both require LLM roles configured in aib's config.toml -- \
+                 the image exactly as before. Both require LLM roles configured in truewright's config.toml -- \
                  they fail with a clear error, not a crash, when none is set up."
                     .to_string(),
             )
@@ -1249,7 +1249,7 @@ fn map_agent_err(e: agent::AgentError) -> McpError {
 }
 
 /// One line per step-relevant event for `browser_run_task`'s returned
-/// transcript -- mirrors `aib agent`'s own human-readable rendering
+/// transcript -- mirrors `truewright agent`'s own human-readable rendering
 /// (`src/agent_cmd.rs`'s `render_event`), building strings instead of
 /// printing them. `Step`/`Done` carry nothing a transcript line needs that
 /// isn't already in the final PASS/FAIL summary appended after this loop.

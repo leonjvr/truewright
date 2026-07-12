@@ -1,7 +1,7 @@
 //! Config loading and role resolution (llm-providers spec: "Config file
 //! loading", "Role resolution"; oauth-subscription-auth spec: "OAuth
 //! provider config"). A missing config file is a valid, empty
-//! configuration -- `aib`'s browser tools must keep working with no LLM
+//! configuration -- `truewright`'s browser tools must keep working with no LLM
 //! setup at all; only agent-facing commands need roles resolved, and they
 //! fail with a clear, specific error at that point instead.
 
@@ -115,40 +115,40 @@ pub struct Config {
 impl Config {
     /// Empty configuration -- no providers, no roles. Valid; every
     /// browser-only code path keeps working. `resolve_role` on this always
-    /// returns `UnknownRole`. `aib_data_dir` is still needed to give the
+    /// returns `UnknownRole`. `truewright_data_dir` is still needed to give the
     /// (unused, since there are no providers) token store a real path.
-    pub fn empty(aib_data_dir: &Path) -> Self {
+    pub fn empty(truewright_data_dir: &Path) -> Self {
         Self {
             providers: BTreeMap::new(),
             roles: BTreeMap::new(),
             agent: AgentSettings::default(),
             skills: SkillsConfig::default(),
-            token_store: Arc::new(TokenStore::new(aib_data_dir.join("auth"))),
+            token_store: Arc::new(TokenStore::new(truewright_data_dir.join("auth"))),
         }
     }
 
     /// Resolves the config file to load, in priority order: `explicit_path`
-    /// (e.g. `--config`) -> `AIB_CONFIG` env var -> `./aib.toml` (project
-    /// local) -> `<aib_data_dir>/config.toml`. `aib_data_dir` is the
-    /// caller's already-resolved `<data-dir>/aib` (matching every other
+    /// (e.g. `--config`) -> `TRUEWRIGHT_CONFIG` env var -> `./truewright.toml` (project
+    /// local) -> `<truewright_data_dir>/config.toml`. `truewright_data_dir` is the
+    /// caller's already-resolved `<data-dir>/truewright` (matching every other
     /// per-user path in this project, e.g. `cdp::launch::profile_base_dir`
     /// callers) -- also where OAuth tokens are stored, under `auth/`. A
     /// missing file at the resolved path is not an error -- see
     /// `Config::empty`.
     #[allow(clippy::result_large_err)]
-    pub fn load(aib_data_dir: &Path, explicit_path: Option<&Path>) -> Result<Self> {
+    pub fn load(truewright_data_dir: &Path, explicit_path: Option<&Path>) -> Result<Self> {
         let path = if let Some(p) = explicit_path {
             p.to_path_buf()
-        } else if let Ok(env_path) = std::env::var("AIB_CONFIG") {
+        } else if let Ok(env_path) = std::env::var("TRUEWRIGHT_CONFIG") {
             PathBuf::from(env_path)
-        } else if Path::new("./aib.toml").is_file() {
-            PathBuf::from("./aib.toml")
+        } else if Path::new("./truewright.toml").is_file() {
+            PathBuf::from("./truewright.toml")
         } else {
-            aib_data_dir.join("config.toml")
+            truewright_data_dir.join("config.toml")
         };
 
         if !path.is_file() {
-            return Ok(Config::empty(aib_data_dir));
+            return Ok(Config::empty(truewright_data_dir));
         }
 
         let text = std::fs::read_to_string(&path).map_err(|source| LlmError::ConfigRead {
@@ -163,7 +163,7 @@ impl Config {
             roles: raw.roles,
             agent: raw.agent,
             skills: raw.skills,
-            token_store: Arc::new(TokenStore::new(aib_data_dir.join("auth"))),
+            token_store: Arc::new(TokenStore::new(truewright_data_dir.join("auth"))),
         })
     }
 
@@ -293,7 +293,7 @@ mod tests {
 
     fn write_temp_toml(name: &str, contents: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "aib-llm-config-test-{name}-{}.toml",
+            "truewright-llm-config-test-{name}-{}.toml",
             std::process::id()
         ));
         std::fs::write(&path, contents).expect("write temp config");
@@ -364,7 +364,8 @@ mod tests {
 
     #[test]
     fn missing_config_file_is_a_valid_empty_config() {
-        let nonexistent = std::env::temp_dir().join("aib-llm-config-test-does-not-exist.toml");
+        let nonexistent =
+            std::env::temp_dir().join("truewright-llm-config-test-does-not-exist.toml");
         let config = Config::load(&PathBuf::from("unused"), Some(&nonexistent))
             .expect("missing file is not an error");
         assert!(!config.has_role("driver"));
@@ -448,9 +449,9 @@ mod tests {
         assert!(matches!(role.client, Client::Responses(_)));
     }
 
-    // AIB_CHROME_PATH-style lesson from this project's own history: env-var
+    // TRUEWRIGHT_CHROME_PATH-style lesson from this project's own history: env-var
     // mutation is process-global and Rust's default test harness runs tests
-    // concurrently, so every AIB_CONFIG/api_key_env assertion lives in one
+    // concurrently, so every TRUEWRIGHT_CONFIG/api_key_env assertion lives in one
     // test function rather than racing across several.
     #[test]
     fn env_var_precedence_and_credential_resolution() {
@@ -460,7 +461,7 @@ mod tests {
                 [providers.deepseek]
                 kind = "openai-compat"
                 base_url = "https://api.deepseek.com/v1"
-                api_key_env = "AIB_LLM_TEST_DEEPSEEK_KEY"
+                api_key_env = "TRUEWRIGHT_LLM_TEST_DEEPSEEK_KEY"
 
                 [roles.driver]
                 provider = "deepseek"
@@ -468,23 +469,23 @@ mod tests {
             "#,
         );
 
-        // AIB_CONFIG is honored when no explicit path is given.
-        std::env::set_var("AIB_CONFIG", &config_path);
+        // TRUEWRIGHT_CONFIG is honored when no explicit path is given.
+        std::env::set_var("TRUEWRIGHT_CONFIG", &config_path);
         let config = Config::load(&PathBuf::from("unused-fallback"), None)
-            .expect("config parses via AIB_CONFIG");
+            .expect("config parses via TRUEWRIGHT_CONFIG");
 
         // api_key_env resolves once the env var is set...
-        std::env::set_var("AIB_LLM_TEST_DEEPSEEK_KEY", "sk-from-env");
+        std::env::set_var("TRUEWRIGHT_LLM_TEST_DEEPSEEK_KEY", "sk-from-env");
         assert!(config.resolve_role("driver").is_ok());
 
         // ...and fails clearly when it isn't.
-        std::env::remove_var("AIB_LLM_TEST_DEEPSEEK_KEY");
+        std::env::remove_var("TRUEWRIGHT_LLM_TEST_DEEPSEEK_KEY");
         assert!(matches!(
             config.resolve_role("driver"),
             Err(LlmError::MissingCredential { .. })
         ));
 
-        std::env::remove_var("AIB_CONFIG");
+        std::env::remove_var("TRUEWRIGHT_CONFIG");
         std::fs::remove_file(&config_path).ok();
     }
 }

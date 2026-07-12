@@ -2,7 +2,7 @@
 //! Adapted from the MCP server's own `instructions` string
 //! (`crates/mcp/src/lib.rs`) -- the ref conventions and actionability
 //! rules an agent needs to know are identical regardless of whether the
-//! model driving them is an outer MCP host or `aib`'s own harness; this
+//! model driving them is an outer MCP host or `truewright`'s own harness; this
 //! is restricted to the tool subset `tools::tool_defs()` actually
 //! exposes and adds the harness's own termination contract.
 

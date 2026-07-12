@@ -207,7 +207,10 @@ async fn callback_listener_surfaces_a_denied_consent_as_an_error() {
 
 #[tokio::test]
 async fn token_store_persists_what_login_would_produce() {
-    let dir = std::env::temp_dir().join(format!("aib-llm-oauth-flow-test-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "truewright-llm-oauth-flow-test-{}",
+        std::process::id()
+    ));
     let store = TokenStore::new(dir.clone());
 
     let id_token = make_id_token(

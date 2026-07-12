@@ -1,14 +1,14 @@
 mod agent_cmd;
 mod doctor;
 
-use aib::mcp;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
+use truewright::mcp;
 
 #[derive(Parser)]
 #[command(
-    name = "aib",
-    about = "ai-browser: an LLM-first browser-testing engine"
+    name = "truewright",
+    about = "truewright: an LLM-first browser-testing engine"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -74,7 +74,7 @@ enum Command {
         /// printed once if not given.
         #[arg(long)]
         token: Option<String>,
-        /// Explicit config file path, overriding AIB_CONFIG / ./aib.toml /
+        /// Explicit config file path, overriding TRUEWRIGHT_CONFIG / ./truewright.toml /
         /// the per-user data dir default. Used to resolve [roles.driver]/
         /// [roles.vision] for browser_run_task and screenshot
         /// interpretation (mcp-task-delegation spec); the server keeps
@@ -101,7 +101,7 @@ enum Command {
         action: AuthCommand,
     },
     /// Runs `task` autonomously using a configured LLM role as the driver
-    /// (agent-harness spec) -- `aib` drives its own browser session
+    /// (agent-harness spec) -- `truewright` drives its own browser session
     /// end to end, printing live step progress. Exit code 0 on
     /// task_complete, 1 on task_failed/timeout/step-budget exhaustion, 2
     /// on a config/launch error.
@@ -109,7 +109,7 @@ enum Command {
         /// The task, in natural language.
         task: String,
         /// A skill name to attach (repeatable). Resolved from
-        /// ./.aib/skills/, then <data-dir>/aib/skills/.
+        /// ./.truewright/skills/, then <data-dir>/truewright/skills/.
         #[arg(long = "skill")]
         skills: Vec<String>,
         /// Overrides [roles.driver] with a specific provider/model pair
@@ -132,9 +132,9 @@ enum Command {
         /// Profile name (isolated browser profile dir). Fixed by default
         /// so repeated runs are deterministic, matching stdio-MCP's own
         /// posture.
-        #[arg(long, default_value = "aib-agent")]
+        #[arg(long, default_value = "truewright-agent")]
         profile: String,
-        /// Explicit config file path, overriding AIB_CONFIG / ./aib.toml /
+        /// Explicit config file path, overriding TRUEWRIGHT_CONFIG / ./truewright.toml /
         /// the per-user data dir default.
         #[arg(long)]
         config: Option<PathBuf>,
@@ -150,7 +150,7 @@ enum AuthCommand {
     /// Runs the OAuth login flow for `flow` (currently just "chatgpt"):
     /// prints (and best-effort opens) a sign-in URL, waits for the
     /// browser redirect on a local callback server, and stores the
-    /// resulting tokens under `<data-dir>/aib/auth/<flow>.json`.
+    /// resulting tokens under `<data-dir>/truewright/auth/<flow>.json`.
     Login { flow: String },
     /// Lists every provider with stored tokens and their expiry.
     Status,
@@ -166,7 +166,7 @@ enum LlmCommand {
     Ping {
         /// Role name from `[roles]` in the config file (e.g. "driver").
         role: String,
-        /// Explicit config file path, overriding AIB_CONFIG / ./aib.toml /
+        /// Explicit config file path, overriding TRUEWRIGHT_CONFIG / ./truewright.toml /
         /// the per-user data dir default.
         #[arg(long)]
         config: Option<PathBuf>,
@@ -270,8 +270,8 @@ async fn main() -> std::process::ExitCode {
     }
 }
 
-/// Builds the optional agent config `aib mcp` threads into every
-/// `AibTools` it creates. A missing config file (or a valid one with no
+/// Builds the optional agent config `truewright mcp` threads into every
+/// `TruewrightTools` it creates. A missing config file (or a valid one with no
 /// `[roles.driver]`) is the ordinary, zero-LLM-setup case -- silently
 /// `None`, every browser-only tool keeps working exactly as before this
 /// capability existed. A config file that *fails to parse* is different:
@@ -281,15 +281,17 @@ async fn main() -> std::process::ExitCode {
 fn build_mcp_agent_config(
     config_path: Option<&std::path::Path>,
 ) -> Option<mcp_server::AgentConfig> {
-    let aib_data_dir = resolve_aib_data_dir()
-        .inspect_err(|e| eprintln!("aib mcp: failed to resolve per-user data directory: {e}"))
+    let truewright_data_dir = resolve_truewright_data_dir()
+        .inspect_err(|e| {
+            eprintln!("truewright mcp: failed to resolve per-user data directory: {e}")
+        })
         .ok()?;
 
-    let config = match llm::Config::load(&aib_data_dir, config_path) {
+    let config = match llm::Config::load(&truewright_data_dir, config_path) {
         Ok(c) => c,
         Err(e) => {
             eprintln!(
-                "aib mcp: failed to load LLM config ({e}); browser_run_task and screenshot \
+                "truewright mcp: failed to load LLM config ({e}); browser_run_task and screenshot \
                  interpretation will be unavailable until it's fixed"
             );
             return None;
@@ -306,7 +308,7 @@ fn build_mcp_agent_config(
         task_timeout: std::time::Duration::from_secs(config.agent.task_timeout_secs),
         max_retained_snapshots: config.agent.max_retained_snapshots,
     });
-    let skill_dirs = agent::default_skill_dirs(&aib_data_dir, &config.skills.dirs);
+    let skill_dirs = agent::default_skill_dirs(&truewright_data_dir, &config.skills.dirs);
     Some(mcp_server::AgentConfig {
         harness,
         skill_dirs,
@@ -317,7 +319,7 @@ fn build_mcp_agent_config(
 /// model/latency/reply -- the live-verification hook for the llm-providers
 /// change (no browser session involved at all).
 async fn llm_ping(role: &str, config_path: Option<PathBuf>) -> std::process::ExitCode {
-    let aib_data_dir = match resolve_aib_data_dir() {
+    let truewright_data_dir = match resolve_truewright_data_dir() {
         Ok(dir) => dir,
         Err(e) => {
             eprintln!("failed to resolve per-user data directory: {e}");
@@ -325,7 +327,7 @@ async fn llm_ping(role: &str, config_path: Option<PathBuf>) -> std::process::Exi
         }
     };
 
-    let config = match llm::Config::load(&aib_data_dir, config_path.as_deref()) {
+    let config = match llm::Config::load(&truewright_data_dir, config_path.as_deref()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("failed to load config: {e}");
@@ -368,29 +370,29 @@ async fn llm_ping(role: &str, config_path: Option<PathBuf>) -> std::process::Exi
     }
 }
 
-/// `<data-dir>/aib`, the same per-user directory every other `aib`
+/// `<data-dir>/truewright`, the same per-user directory every other `truewright`
 /// subsystem uses (profiles, traces, recordings) -- OAuth tokens live at
 /// `<this>/auth/<flow>.json`.
 // CdpError is kept as one flat enum (matches its own design.md Decision
 // #5); boxing it here too would ripple through call sites for marginal
 // benefit at this size.
 #[allow(clippy::result_large_err)]
-pub(crate) fn resolve_aib_data_dir() -> cdp::error::Result<PathBuf> {
-    cdp::launch::profile_base_dir().map(|dir| dir.join("aib"))
+pub(crate) fn resolve_truewright_data_dir() -> cdp::error::Result<PathBuf> {
+    cdp::launch::profile_base_dir().map(|dir| dir.join("truewright"))
 }
 
 /// Runs the OAuth login flow and prints the outcome. The flow itself
 /// prints the sign-in URL and best-effort opens it; this just reports
 /// success/failure once the browser redirect completes.
 async fn auth_login(flow: &str) -> std::process::ExitCode {
-    let aib_data_dir = match resolve_aib_data_dir() {
+    let truewright_data_dir = match resolve_truewright_data_dir() {
         Ok(dir) => dir,
         Err(e) => {
             eprintln!("failed to resolve per-user data directory: {e}");
             return std::process::ExitCode::FAILURE;
         }
     };
-    let store = llm::TokenStore::new(aib_data_dir.join("auth"));
+    let store = llm::TokenStore::new(truewright_data_dir.join("auth"));
 
     match llm::oauth_login(flow, &store).await {
         Ok(tokens) => {
@@ -408,18 +410,18 @@ async fn auth_login(flow: &str) -> std::process::ExitCode {
 }
 
 fn auth_status() -> std::process::ExitCode {
-    let aib_data_dir = match resolve_aib_data_dir() {
+    let truewright_data_dir = match resolve_truewright_data_dir() {
         Ok(dir) => dir,
         Err(e) => {
             eprintln!("failed to resolve per-user data directory: {e}");
             return std::process::ExitCode::FAILURE;
         }
     };
-    let store = llm::TokenStore::new(aib_data_dir.join("auth"));
+    let store = llm::TokenStore::new(truewright_data_dir.join("auth"));
 
     let flows = store.list();
     if flows.is_empty() {
-        println!("No stored logins. Run `aib auth login <flow>` (e.g. `aib auth login chatgpt`).");
+        println!("No stored logins. Run `truewright auth login <flow>` (e.g. `truewright auth login chatgpt`).");
         return std::process::ExitCode::SUCCESS;
     }
     for flow in flows {
@@ -445,14 +447,14 @@ fn auth_status() -> std::process::ExitCode {
 }
 
 fn auth_logout(flow: &str) -> std::process::ExitCode {
-    let aib_data_dir = match resolve_aib_data_dir() {
+    let truewright_data_dir = match resolve_truewright_data_dir() {
         Ok(dir) => dir,
         Err(e) => {
             eprintln!("failed to resolve per-user data directory: {e}");
             return std::process::ExitCode::FAILURE;
         }
     };
-    let store = llm::TokenStore::new(aib_data_dir.join("auth"));
+    let store = llm::TokenStore::new(truewright_data_dir.join("auth"));
 
     match store.delete(flow) {
         Ok(()) => {

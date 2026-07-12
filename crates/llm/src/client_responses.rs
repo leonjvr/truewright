@@ -24,10 +24,10 @@ use serde::Deserialize;
 /// writeup (see design.md).
 pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const RESPONSES_PATH: &str = "/responses";
-/// aib's own identifier, not OpenAI's `codex_cli_rs` -- this project
+/// truewright's own identifier, not OpenAI's `codex_cli_rs` -- this project
 /// doesn't misrepresent itself as the Codex CLI client (see design.md's
 /// honesty-vs-compatibility discussion).
-const ORIGINATOR: &str = "aib_agent_harness";
+const ORIGINATOR: &str = "truewright_agent_harness";
 
 #[derive(Clone)]
 pub struct ResponsesClient {

@@ -72,18 +72,18 @@ pub enum LlmError {
     #[error("unknown OAuth flow {0:?}")]
     UnknownOAuthFlow(String),
 
-    #[error("no stored login for provider {0:?} -- run `aib auth login {0}`")]
+    #[error("no stored login for provider {0:?} -- run `truewright auth login {0}`")]
     NotLoggedIn(String),
 
     #[error("OAuth login for {provider:?} failed: {reason}")]
     OAuthLoginFailed { provider: String, reason: String },
 
     #[error(
-        "OAuth callback state mismatch -- the login link may be stale; run `aib auth login` again"
+        "OAuth callback state mismatch -- the login link may be stale; run `truewright auth login` again"
     )]
     OAuthStateMismatch,
 
-    #[error("refreshing the OAuth token for {provider:?} failed: {reason} -- run `aib auth login {provider}` again")]
+    #[error("refreshing the OAuth token for {provider:?} failed: {reason} -- run `truewright auth login {provider}` again")]
     OAuthRefreshFailed { provider: String, reason: String },
 
     #[error("local OAuth callback server failed: {0}")]

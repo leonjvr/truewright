@@ -75,7 +75,11 @@ pub struct ConsoleCapture {
 }
 
 impl ConsoleCapture {
-    pub(crate) async fn start(page: &Page, name: &str, action_sink: ActionTraceSink) -> Result<Self> {
+    pub(crate) async fn start(
+        page: &Page,
+        name: &str,
+        action_sink: ActionTraceSink,
+    ) -> Result<Self> {
         let entries = Arc::new(Mutex::new(Vec::new()));
         *action_sink.lock().await = Some(ActiveTrace {
             name: name.to_string(),
@@ -210,7 +214,9 @@ fn render_arg(obj: &RemoteObject) -> String {
 
 #[allow(clippy::result_large_err)]
 fn traces_dir() -> Result<PathBuf> {
-    Ok(cdp::launch::profile_base_dir()?.join("aib").join("traces"))
+    Ok(cdp::launch::profile_base_dir()?
+        .join("truewright")
+        .join("traces"))
 }
 
 /// Saves a `browser_screenshot` capture taken while `name`'s trace is
@@ -270,7 +276,10 @@ fn save_trace(name: &str, entries: &[TraceEntry]) -> Result<PathBuf> {
 pub fn load_trace(name: &str) -> Result<Vec<TraceEntry>> {
     let path = trace_path(name)?;
     let raw = std::fs::read_to_string(&path).map_err(|_| {
-        EngineError::Console(format!("no trace named {name:?} (looked for {})", path.display()))
+        EngineError::Console(format!(
+            "no trace named {name:?} (looked for {})",
+            path.display()
+        ))
     })?;
     raw.lines()
         .filter(|l| !l.trim().is_empty())

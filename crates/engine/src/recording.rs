@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn write_frames_and_manifest_round_trip() {
-        let dir = std::env::temp_dir().join(format!("aib-rec-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("truewright-rec-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let frames = vec![

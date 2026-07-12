@@ -17,7 +17,7 @@ use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 
 const TRAIN_JS: &str = include_str!("../../assets/train.js");
-const BINDING_NAME: &str = "__aibTrainReport";
+const BINDING_NAME: &str = "__truewrightTrainReport";
 /// Hard ceiling so a forgotten `browser_train_stop` can't capture
 /// indefinitely (mirrors `recording.rs`'s `MAX_RECORDING_DURATION`).
 const MAX_TRAINING_DURATION: Duration = Duration::from_secs(300);
@@ -63,7 +63,11 @@ pub struct Training {
 }
 
 impl Training {
-    pub(crate) async fn start(page: &Page, name: &str, training_active: Arc<AtomicBool>) -> Result<Self> {
+    pub(crate) async fn start(
+        page: &Page,
+        name: &str,
+        training_active: Arc<AtomicBool>,
+    ) -> Result<Self> {
         page.add_binding(BINDING_NAME).await?;
         let install: serde_json::Value = serde_json::from_value(
             page.evaluate(&format!(
@@ -127,7 +131,12 @@ impl Training {
 
         let samples = std::mem::take(&mut *self.samples.lock().await);
         let (persona, stats) = fit_persona(&samples)?;
-        super::profile_store::save(&self.name, persona, stats.movements_used, stats.keystrokes_used)
+        super::profile_store::save(
+            &self.name,
+            persona,
+            stats.movements_used,
+            stats.keystrokes_used,
+        )
     }
 }
 
@@ -390,7 +399,12 @@ mod tests {
     /// A straight-line, evenly-timed movement from `from` to `to`, ending
     /// in a `mousedown` -- as close to "textbook Fitts's law" as a fixture
     /// gets, so the fitted constants should be sane and non-degenerate.
-    fn synthetic_movement(from: (f64, f64), to: (f64, f64), start_t: f64, duration_ms: f64) -> Vec<Sample> {
+    fn synthetic_movement(
+        from: (f64, f64),
+        to: (f64, f64),
+        start_t: f64,
+        duration_ms: f64,
+    ) -> Vec<Sample> {
         let steps = 10;
         let mut out = Vec::new();
         for i in 0..=steps {
@@ -527,6 +541,9 @@ mod tests {
         samples.extend(synthetic_typing(5000.0, 6, 90.0));
 
         let (persona, _stats) = fit_persona(&samples).expect("should fit");
-        assert!(persona.overshoot_p > 0.0, "expected at least one overshoot to be detected");
+        assert!(
+            persona.overshoot_p > 0.0,
+            "expected at least one overshoot to be detected"
+        );
     }
 }

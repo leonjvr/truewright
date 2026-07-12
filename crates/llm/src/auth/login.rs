@@ -1,6 +1,6 @@
 //! Orchestrates one full OAuth login (oauth-subscription-auth spec:
 //! "PKCE authorization flow"), and the token exchange/refresh HTTP calls
-//! `CredentialSource::OAuth` and `aib auth login` both need.
+//! `CredentialSource::OAuth` and `truewright auth login` both need.
 
 use super::callback;
 use super::flows::{self, OAuthFlowSpec};

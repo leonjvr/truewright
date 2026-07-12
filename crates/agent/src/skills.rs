@@ -1,7 +1,7 @@
 //! Reusable prompt files (agent-harness spec: "Skills"). Plain Markdown,
-//! name = file stem. Resolution order: project-local `./.aib/skills/`
+//! name = file stem. Resolution order: project-local `./.truewright/skills/`
 //! (so a repo can pin its own house style/known-gotchas for whoever runs
-//! `aib agent` against it) -> the per-user `<data-dir>/aib/skills/` ->
+//! `truewright agent` against it) -> the per-user `<data-dir>/truewright/skills/` ->
 //! each configured extra directory, in order -- first hit wins.
 
 use crate::error::{AgentError, Result};
@@ -43,8 +43,11 @@ fn resolve_one(name: &str, search_dirs: &[PathBuf]) -> Result<Skill> {
 
 /// The default search path, in priority order: project-local, then the
 /// per-user data dir, then any extra configured dirs.
-pub fn default_search_dirs(aib_data_dir: &Path, extra: &[String]) -> Vec<PathBuf> {
-    let mut dirs = vec![PathBuf::from("./.aib/skills"), aib_data_dir.join("skills")];
+pub fn default_search_dirs(truewright_data_dir: &Path, extra: &[String]) -> Vec<PathBuf> {
+    let mut dirs = vec![
+        PathBuf::from("./.truewright/skills"),
+        truewright_data_dir.join("skills"),
+    ];
     dirs.extend(extra.iter().map(PathBuf::from));
     dirs
 }
@@ -75,7 +78,7 @@ mod tests {
 
     fn temp_skills_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "aib-agent-skills-test-{name}-{}",
+            "truewright-agent-skills-test-{name}-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();

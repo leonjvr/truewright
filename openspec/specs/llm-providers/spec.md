@@ -1,7 +1,7 @@
 # llm-providers Specification
 
 ## Purpose
-Provider-agnostic LLM access for `aib`'s own agent harness: a single OpenAI-compatible chat-completions client any provider (DeepSeek, MiniMax, GLM, Grok, OpenAI, ...) can be configured against by name, plus the role-based config that resolves a client with credentials attached. This is the foundation `agent-harness`'s driving loop and `mcp-task-delegation`'s MCP tools are built on -- it doesn't drive anything by itself yet.
+Provider-agnostic LLM access for `truewright`'s own agent harness: a single OpenAI-compatible chat-completions client any provider (DeepSeek, MiniMax, GLM, Grok, OpenAI, ...) can be configured against by name, plus the role-based config that resolves a client with credentials attached. This is the foundation `agent-harness`'s driving loop and `mcp-task-delegation`'s MCP tools are built on -- it doesn't drive anything by itself yet.
 ## Requirements
 ### Requirement: Provider-agnostic chat-completions client
 The system SHALL provide a client that sends chat-completion requests (system/user/assistant/tool messages, text and image content, function-calling tool definitions) to any OpenAI-compatible `/chat/completions` endpoint and parses its response into provider-neutral types, without any provider-specific code outside that one client module.
@@ -25,7 +25,7 @@ The system SHALL provide a client that sends chat-completion requests (system/us
 - **THEN** the request fails immediately with a typed error, with no retry
 
 ### Requirement: Config file loading with a safe default
-The system SHALL load LLM provider/role configuration from a TOML file resolved in order (explicit path, `AIB_CONFIG` env var, project-local `./aib.toml`, per-user data-dir default), and SHALL treat a missing file at the resolved location as a valid, empty configuration rather than an error.
+The system SHALL load LLM provider/role configuration from a TOML file resolved in order (explicit path, `TRUEWRIGHT_CONFIG` env var, project-local `./truewright.toml`, per-user data-dir default), and SHALL treat a missing file at the resolved location as a valid, empty configuration rather than an error.
 
 #### Scenario: No config file exists anywhere in the resolution chain
 - **WHEN** no config file is found at any location in the resolution order
@@ -33,7 +33,7 @@ The system SHALL load LLM provider/role configuration from a TOML file resolved 
 
 #### Scenario: An explicit path overrides every other source
 - **WHEN** an explicit config path is given
-- **THEN** that file is loaded regardless of `AIB_CONFIG`, `./aib.toml`, or the per-user default's presence
+- **THEN** that file is loaded regardless of `TRUEWRIGHT_CONFIG`, `./truewright.toml`, or the per-user default's presence
 
 ### Requirement: Role resolution with clear, specific errors
 The system SHALL resolve a named role (e.g. `"driver"`, `"vision"`) to a ready-to-use client by looking up the role, then its provider, then its credential (a literal `api_key`, an `api_key_env` environment variable, or an OAuth flow), and SHALL fail with a specific, actionable error identifying exactly which lookup failed rather than a generic failure. The system SHALL also support resolving a client directly from a configured provider name and an explicit model string, bypassing the `[roles.*]` table entirely.
@@ -52,7 +52,7 @@ The system SHALL resolve a named role (e.g. `"driver"`, `"vision"`) to a ready-t
 
 #### Scenario: An OAuth-authenticated role with no completed login fails clearly
 - **WHEN** a role resolves to a provider configured with `oauth_flow` but no login has been completed for that flow
-- **THEN** the first request against it fails with an error directing the user to `aib auth login <flow>`, rather than an opaque authentication failure from the provider itself
+- **THEN** the first request against it fails with an error directing the user to `truewright auth login <flow>`, rather than an opaque authentication failure from the provider itself
 
 #### Scenario: A provider is resolved directly by name, without a matching role
 - **WHEN** a configured provider name and an explicit model string are resolved directly, with no `[roles.*]` entry referencing that provider
@@ -63,14 +63,14 @@ The system SHALL resolve a named role (e.g. `"driver"`, `"vision"`) to a ready-t
 - **THEN** resolution fails with an error naming that provider, without referencing a role that was never involved
 
 ### Requirement: CLI connectivity probe
-The system SHALL provide an `aib llm ping <role>` command that resolves the given role and sends one real completion request, printing the resolved model, round-trip latency, and the reply text on success, or a clear error on failure.
+The system SHALL provide a `truewright llm ping <role>` command that resolves the given role and sends one real completion request, printing the resolved model, round-trip latency, and the reply text on success, or a clear error on failure.
 
 #### Scenario: Pinging a correctly configured role succeeds
-- **WHEN** `aib llm ping <role>` is run against a role whose provider is reachable and correctly credentialed
+- **WHEN** `truewright llm ping <role>` is run against a role whose provider is reachable and correctly credentialed
 - **THEN** it prints the model name, a latency measurement, and the provider's reply text, and exits successfully
 
 #### Scenario: Pinging a misconfigured role fails clearly
-- **WHEN** `aib llm ping <role>` is run against an unknown role, a role with an unconfigured provider, or a provider with no credential
+- **WHEN** `truewright llm ping <role>` is run against an unknown role, a role with an unconfigured provider, or a provider with no credential
 - **THEN** it prints the specific resolution error and exits with a failure code
 
 ### Requirement: PKCE authorization flow for subscription-based providers
@@ -115,13 +115,13 @@ The system SHALL provide a client for the OpenAI Responses API shape used by Cha
 - **THEN** the request carries the account id in the header the backend requires
 
 ### Requirement: CLI login/status/logout
-The system SHALL provide `aib auth login <flow>`, `aib auth status`, and `aib auth logout <flow>` commands to manage OAuth logins.
+The system SHALL provide `truewright auth login <flow>`, `truewright auth status`, and `truewright auth logout <flow>` commands to manage OAuth logins.
 
 #### Scenario: Status lists every stored login with its expiry
-- **WHEN** `aib auth status` is run with one or more completed logins stored
+- **WHEN** `truewright auth status` is run with one or more completed logins stored
 - **THEN** it lists each flow, its associated account (if known), and whether its token is still valid or will refresh on next use
 
 #### Scenario: Logout removes stored tokens
-- **WHEN** `aib auth logout <flow>` is run for a flow with stored tokens
-- **THEN** those tokens are deleted and a subsequent `aib auth status` no longer lists that flow
+- **WHEN** `truewright auth logout <flow>` is run for a flow with stored tokens
+- **THEN** those tokens are deleted and a subsequent `truewright auth status` no longer lists that flow
 

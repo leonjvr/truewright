@@ -39,7 +39,7 @@ pub enum CredentialSource {
     Static(String),
     /// A provider authenticated via OAuth (e.g. a ChatGPT subscription).
     /// `provider` identifies the config's provider name for error
-    /// messages only ("run `aib auth login <provider>`" needs to name
+    /// messages only ("run `truewright auth login <provider>`" needs to name
     /// what the *user* configured, not the underlying flow id). Storage
     /// is keyed by `flow_id`, not `provider` -- `login_with_flow`/
     /// `refresh_with_flow` both save under `flow.id`, and a config could
@@ -128,8 +128,10 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_credential_with_no_stored_login_fails_clearly() {
-        let dir =
-            std::env::temp_dir().join(format!("aib-llm-credsource-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "truewright-llm-credsource-test-{}",
+            std::process::id()
+        ));
         let source = CredentialSource::OAuth {
             provider: "chatgpt".to_string(),
             flow_id: "chatgpt".to_string(),
@@ -148,7 +150,7 @@ mod tests {
     #[tokio::test]
     async fn stored_tokens_are_found_when_provider_name_differs_from_flow_id() {
         let dir = std::env::temp_dir().join(format!(
-            "aib-llm-credsource-mismatch-test-{}",
+            "truewright-llm-credsource-mismatch-test-{}",
             std::process::id()
         ));
         let store = Arc::new(TokenStore::new(dir.clone()));

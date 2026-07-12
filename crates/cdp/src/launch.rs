@@ -64,7 +64,7 @@ pub enum BrowserPreference {
 // for marginal benefit at this size, so the large-error lint is accepted here.
 #[allow(clippy::result_large_err)]
 pub fn discover_browsers() -> Result<Vec<DiscoveredBrowser>> {
-    if let Some(path) = std::env::var_os("AIB_CHROME_PATH") {
+    if let Some(path) = std::env::var_os("TRUEWRIGHT_CHROME_PATH") {
         let path = PathBuf::from(path);
         return if path.is_file() {
             Ok(vec![DiscoveredBrowser {
@@ -74,7 +74,7 @@ pub fn discover_browsers() -> Result<Vec<DiscoveredBrowser>> {
             }])
         } else {
             Err(CdpError::NoBrowserFound {
-                checked: format!("AIB_CHROME_PATH={}", path.display()),
+                checked: format!("TRUEWRIGHT_CHROME_PATH={}", path.display()),
             })
         };
     }
@@ -101,7 +101,7 @@ pub fn discover_browsers() -> Result<Vec<DiscoveredBrowser>> {
 }
 
 /// Picks the binary for a headless session (browser-attach spec: "Managed
-/// chrome-headless-shell for headless runs"): `AIB_CHROME_PATH` override (if
+/// chrome-headless-shell for headless runs"): `TRUEWRIGHT_CHROME_PATH` override (if
 /// set) → cached shell → downloaded shell → installed browser, unless the
 /// caller opted out with [`BrowserPreference::Installed`]. Failures on the
 /// shell path degrade to the installed browser with a warning, never a hard
@@ -111,7 +111,7 @@ pub fn discover_browsers() -> Result<Vec<DiscoveredBrowser>> {
 /// suite this override exists to redirect.
 #[allow(clippy::result_large_err)]
 pub async fn resolve_headless_browser(pref: BrowserPreference) -> Result<DiscoveredBrowser> {
-    if std::env::var_os("AIB_CHROME_PATH").is_some() {
+    if std::env::var_os("TRUEWRIGHT_CHROME_PATH").is_some() {
         return discover_browsers().map(|mut found| found.remove(0));
     }
     if pref == BrowserPreference::Auto {
@@ -296,7 +296,7 @@ pub async fn launch_with_flags(
     extra_args: &[&str],
 ) -> Result<LaunchedBrowser> {
     let user_data_dir = profile_base_dir()?
-        .join("aib")
+        .join("truewright")
         .join("profiles")
         .join(profile_name);
     std::fs::create_dir_all(&user_data_dir)?;
@@ -464,23 +464,23 @@ fn kill_process_group(pid: u32) {
 mod tests {
     use super::*;
 
-    // AIB_CHROME_PATH is process-global env state, and Rust's default test
+    // TRUEWRIGHT_CHROME_PATH is process-global env state, and Rust's default test
     // harness runs #[test]/#[tokio::test] functions concurrently on separate
     // threads within the same process -- any second test mutating this same
-    // var races this one. All AIB_CHROME_PATH assertions live in this single
+    // var races this one. All TRUEWRIGHT_CHROME_PATH assertions live in this single
     // test function so there is nothing to race with, rather than relying on
     // test-runner isolation that doesn't actually exist here.
     #[tokio::test]
-    async fn aib_chrome_path_overrides_discovery_and_the_managed_headless_shell() {
+    async fn truewright_chrome_path_overrides_discovery_and_the_managed_headless_shell() {
         let real_chrome = discover_browsers().ok().map(|found| found[0].path.clone());
         let Some(real_chrome) = real_chrome else {
             eprintln!(
-                "skipping aib_chrome_path_overrides_discovery_and_the_managed_headless_shell: no installed browser found"
+                "skipping truewright_chrome_path_overrides_discovery_and_the_managed_headless_shell: no installed browser found"
             );
             return;
         };
 
-        std::env::set_var("AIB_CHROME_PATH", &real_chrome);
+        std::env::set_var("TRUEWRIGHT_CHROME_PATH", &real_chrome);
         let result = discover_browsers();
         let found = result.expect("override should discover successfully");
         assert_eq!(found.len(), 1);
@@ -491,16 +491,19 @@ mod tests {
         let resolved = result.expect("override should resolve successfully");
         assert_eq!(
             resolved.path, real_chrome,
-            "AIB_CHROME_PATH must win over the managed chrome-headless-shell path"
+            "TRUEWRIGHT_CHROME_PATH must win over the managed chrome-headless-shell path"
         );
-        std::env::remove_var("AIB_CHROME_PATH");
+        std::env::remove_var("TRUEWRIGHT_CHROME_PATH");
 
-        std::env::set_var("AIB_CHROME_PATH", r"C:\definitely\not\a\real\browser.exe");
+        std::env::set_var(
+            "TRUEWRIGHT_CHROME_PATH",
+            r"C:\definitely\not\a\real\browser.exe",
+        );
         let result = discover_browsers();
-        std::env::remove_var("AIB_CHROME_PATH");
+        std::env::remove_var("TRUEWRIGHT_CHROME_PATH");
         assert!(
             result.is_err(),
-            "a nonexistent AIB_CHROME_PATH must error, not silently fall back"
+            "a nonexistent TRUEWRIGHT_CHROME_PATH must error, not silently fall back"
         );
     }
 
@@ -537,7 +540,8 @@ mod tests {
 
     #[tokio::test]
     async fn devtools_endpoint_reads_existing_port_file() {
-        let dir = std::env::temp_dir().join(format!("aib-test-{}-{}", std::process::id(), 1));
+        let dir =
+            std::env::temp_dir().join(format!("truewright-test-{}-{}", std::process::id(), 1));
         std::fs::create_dir_all(&dir).unwrap();
         let port_file = dir.join("DevToolsActivePort");
         std::fs::write(&port_file, "12345\n/devtools/browser/abc-123\n").unwrap();
@@ -552,7 +556,8 @@ mod tests {
 
     #[tokio::test]
     async fn devtools_endpoint_times_out_when_file_never_appears() {
-        let dir = std::env::temp_dir().join(format!("aib-test-{}-{}", std::process::id(), 2));
+        let dir =
+            std::env::temp_dir().join(format!("truewright-test-{}-{}", std::process::id(), 2));
         let missing = dir.join("DevToolsActivePort");
 
         let result = wait_for_devtools_endpoint(&missing, Duration::from_millis(150)).await;

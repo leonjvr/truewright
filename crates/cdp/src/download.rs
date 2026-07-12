@@ -63,7 +63,7 @@ struct DownloadEntry {
 #[allow(clippy::result_large_err)]
 fn browsers_dir() -> Result<PathBuf> {
     Ok(crate::launch::profile_base_dir()?
-        .join("aib")
+        .join("truewright")
         .join("browsers"))
 }
 

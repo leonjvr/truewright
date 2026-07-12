@@ -1,6 +1,6 @@
 //! Persisted OAuth tokens (oauth-subscription-auth spec: "Token store").
-//! One JSON file per provider at `<data-dir>/aib/auth/<provider>.json` --
-//! the same per-user data dir every other `aib` subsystem uses (profiles,
+//! One JSON file per provider at `<data-dir>/truewright/auth/<provider>.json` --
+//! the same per-user data dir every other `truewright` subsystem uses (profiles,
 //! traces, recordings), just a new subdirectory.
 
 use crate::error::{LlmError, Result};
@@ -78,7 +78,7 @@ impl TokenStore {
         Ok(())
     }
 
-    /// Every flow id with a stored token file -- used by `aib auth status`.
+    /// Every flow id with a stored token file -- used by `truewright auth status`.
     /// An empty list (including when the auth directory doesn't exist yet
     /// at all) is not an error; it just means nobody has logged in.
     pub fn list(&self) -> Vec<String> {
@@ -117,7 +117,7 @@ mod tests {
 
     fn temp_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "aib-llm-token-store-test-{name}-{}",
+            "truewright-llm-token-store-test-{name}-{}",
             std::process::id()
         ))
     }

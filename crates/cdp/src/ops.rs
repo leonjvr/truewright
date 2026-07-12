@@ -278,12 +278,12 @@ impl Page {
         };
 
         const GET_OR_CREATE_REF_JS: &str = "function() {
-            window.__aib = window.__aib || { refs: new Map(), elRefs: new WeakMap(), counter: 0 };
-            var ref = window.__aib.elRefs.get(this);
+            window.__truewright = window.__truewright || { refs: new Map(), elRefs: new WeakMap(), counter: 0 };
+            var ref = window.__truewright.elRefs.get(this);
             if (!ref) {
-                ref = 'e' + (++window.__aib.counter);
-                window.__aib.elRefs.set(this, ref);
-                window.__aib.refs.set(ref, this);
+                ref = 'e' + (++window.__truewright.counter);
+                window.__truewright.elRefs.set(this, ref);
+                window.__truewright.refs.set(ref, this);
             }
             return ref;
         }";

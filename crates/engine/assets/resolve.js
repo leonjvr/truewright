@@ -1,8 +1,8 @@
 function (ref) {
-  if (!window.__aib || !window.__aib.refs) {
+  if (!window.__truewright || !window.__truewright.refs) {
     return { ok: false };
   }
-  var el = window.__aib.refs.get(ref);
+  var el = window.__truewright.refs.get(ref);
   if (!el || !el.isConnected) {
     return { ok: false };
   }

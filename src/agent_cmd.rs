@@ -1,4 +1,4 @@
-//! `aib agent "task"` CLI wiring (agent-harness spec): resolves config,
+//! `truewright agent "task"` CLI wiring (agent-harness spec): resolves config,
 //! roles, and skills, launches a browser, and runs the task through
 //! `agent::Harness`, rendering live progress.
 
@@ -19,7 +19,7 @@ pub async fn run(
     config_path: Option<PathBuf>,
     json: bool,
 ) -> std::process::ExitCode {
-    let aib_data_dir = match crate::resolve_aib_data_dir() {
+    let truewright_data_dir = match crate::resolve_truewright_data_dir() {
         Ok(dir) => dir,
         Err(e) => {
             eprintln!("failed to resolve per-user data directory: {e}");
@@ -27,7 +27,7 @@ pub async fn run(
         }
     };
 
-    let config = match llm::Config::load(&aib_data_dir, config_path.as_deref()) {
+    let config = match llm::Config::load(&truewright_data_dir, config_path.as_deref()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("failed to load config: {e}");
@@ -58,7 +58,7 @@ pub async fn run(
         None
     };
 
-    let skill_dirs = agent::default_skill_dirs(&aib_data_dir, &config.skills.dirs);
+    let skill_dirs = agent::default_skill_dirs(&truewright_data_dir, &config.skills.dirs);
     let resolved_skills = match agent::resolve_skills(skills, &skill_dirs) {
         Ok(s) => s,
         Err(e) => {

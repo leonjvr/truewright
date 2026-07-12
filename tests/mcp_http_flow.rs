@@ -1,4 +1,4 @@
-//! mcp-streamable-http spec: `aib mcp --http` serves the same tools stdio
+//! mcp-streamable-http spec: `truewright mcp --http` serves the same tools stdio
 //! does, gated by a bearer token, loopback-only. Auth-layer tests need no
 //! browser; the concurrent-session test skips (not fails) when no browser
 //! is installed, matching Phase 0's integration-test convention.
@@ -19,7 +19,7 @@ async fn spawn_server_with_agent(
     agent: Option<mcp_server::AgentConfig>,
 ) -> (String, CancellationToken) {
     let cancellation_token = CancellationToken::new();
-    let app = aib::mcp::router(
+    let app = truewright::mcp::router(
         true,
         cdp::launch::BrowserPreference::Auto,
         TOKEN.to_string(),

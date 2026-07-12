@@ -127,7 +127,7 @@ async fn account_id_is_sent_as_a_header_when_present() {
     });
 
     let dir = std::env::temp_dir().join(format!(
-        "aib-llm-responses-account-id-test-{}",
+        "truewright-llm-responses-account-id-test-{}",
         std::process::id()
     ));
     let store = std::sync::Arc::new(llm::TokenStore::new(dir.clone()));

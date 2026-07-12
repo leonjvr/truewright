@@ -447,7 +447,7 @@ impl Session {
         let raw = self
             .active_page()
             .await
-            .evaluate(&format!("typeof window.__aibAdvanceClock === 'function' ? (window.__aibAdvanceClock({ms}), true) : false"))
+            .evaluate(&format!("typeof window.__truewrightAdvanceClock === 'function' ? (window.__truewrightAdvanceClock({ms}), true) : false"))
             .await?;
         if raw.as_bool() != Some(true) {
             return Err(EngineError::Clock(
@@ -744,7 +744,7 @@ impl Session {
             let _ = self
                 .active_page()
                 .await
-                .evaluate("window.__aibSuppressTraining = true")
+                .evaluate("window.__truewrightSuppressTraining = true")
                 .await;
         }
         suppress
@@ -755,7 +755,7 @@ impl Session {
             let _ = self
                 .active_page()
                 .await
-                .evaluate("window.__aibSuppressTraining = false")
+                .evaluate("window.__truewrightSuppressTraining = false")
                 .await;
         }
     }
@@ -844,11 +844,11 @@ impl Session {
     }
 
     /// Starts a screencast recording (browser-recording spec). Artifacts
-    /// land under `<data-dir>/aib/recordings/<id>/` once `Recording::stop`
+    /// land under `<data-dir>/truewright/recordings/<id>/` once `Recording::stop`
     /// is called.
     pub async fn start_recording(&self, options: RecordingOptions) -> Result<Recording> {
         let recordings_base = cdp::launch::profile_base_dir()?
-            .join("aib")
+            .join("truewright")
             .join("recordings");
         let page = self.active_page().await;
         Recording::start(&page, options, recordings_base).await

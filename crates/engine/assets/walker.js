@@ -1,5 +1,5 @@
 (function () {
-  window.__aib = window.__aib || { refs: new Map(), elRefs: new WeakMap(), counter: 0 };
+  window.__truewright = window.__truewright || { refs: new Map(), elRefs: new WeakMap(), counter: 0 };
 
   var INTERACTIVE_TAGS = new Set(['A', 'BUTTON', 'INPUT', 'TEXTAREA', 'SELECT', 'SUMMARY']);
   var STRUCTURAL_TAGS = new Set(['MAIN', 'NAV', 'HEADER', 'FOOTER', 'FORM', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6']);
@@ -101,11 +101,11 @@
   }
 
   function refFor(el) {
-    var ref = window.__aib.elRefs.get(el);
+    var ref = window.__truewright.elRefs.get(el);
     if (ref) return ref;
-    ref = 'e' + (++window.__aib.counter);
-    window.__aib.elRefs.set(el, ref);
-    window.__aib.refs.set(ref, el);
+    ref = 'e' + (++window.__truewright.counter);
+    window.__truewright.elRefs.set(el, ref);
+    window.__truewright.refs.set(ref, el);
     return ref;
   }
 

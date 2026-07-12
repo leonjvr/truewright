@@ -5,10 +5,10 @@
 The `browser` MCP server: exposes the engine's navigate/snapshot/action tool set over stdio for any MCP-capable agent host.
 ## Requirements
 ### Requirement: Stdio MCP transport
-`aib mcp` SHALL run an MCP server communicating over stdio (stdin/stdout), suitable for direct configuration in an MCP-client agent host. Log output MUST go to stderr, never stdout, so it cannot corrupt the MCP JSON-RPC stream.
+`truewright mcp` SHALL run an MCP server communicating over stdio (stdin/stdout), suitable for direct configuration in an MCP-client agent host. Log output MUST go to stderr, never stdout, so it cannot corrupt the MCP JSON-RPC stream.
 
 #### Scenario: Server starts and speaks MCP over stdio
-- **WHEN** `aib mcp` is launched by an MCP client
+- **WHEN** `truewright mcp` is launched by an MCP client
 - **THEN** the client's `initialize` handshake succeeds and the client can list the server's tools
 
 ### Requirement: Lazy single session

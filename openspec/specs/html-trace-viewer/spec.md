@@ -23,6 +23,6 @@ The engine SHALL render a previously-saved trace as a single, self-contained HTM
 - **THEN** the resulting HTML file shows all of them in chronological order, distinguishable by kind, with screenshots visible inline without needing any other file alongside it
 
 #### Scenario: Rendering is available both as a CLI command and an MCP tool
-- **WHEN** an already-saved trace is rendered via `aib trace view <name>` or the `browser_render_trace` MCP tool
+- **WHEN** an already-saved trace is rendered via `truewright trace view <name>` or the `browser_render_trace` MCP tool
 - **THEN** both produce the same HTML output and report where it was written
 

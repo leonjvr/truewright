@@ -85,7 +85,7 @@
   // Repeatedly finds and fires the single earliest still-due timer, so a
   // callback that schedules another callback still due within the same
   // advance is picked up too (design.md Decision #3).
-  window.__aibAdvanceClock = function (ms) {
+  window.__truewrightAdvanceClock = function (ms) {
     var target = virtualNow + ms;
     for (;;) {
       var earliestId = null;

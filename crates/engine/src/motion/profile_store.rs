@@ -1,8 +1,8 @@
 //! On-disk persistence for trained personas (human-motion spec: "Persona
 //! fitted from captured samples" persists by name; "Untrained profile fails
 //! clearly" reads it back). Reuses `cdp::launch::profile_base_dir()`'s
-//! platform-appropriate data directory, same family as `aib/profiles/<name>`
-//! (browser user-data) and `aib/recordings/<id>` (screencasts).
+//! platform-appropriate data directory, same family as `truewright/profiles/<name>`
+//! (browser user-data) and `truewright/recordings/<id>` (screencasts).
 
 use super::Persona;
 use crate::error::{EngineError, Result};
@@ -24,7 +24,7 @@ pub struct StoredProfile {
 #[allow(clippy::result_large_err)]
 fn profiles_dir() -> Result<PathBuf> {
     Ok(cdp::launch::profile_base_dir()?
-        .join("aib")
+        .join("truewright")
         .join("profiles")
         .join("human"))
 }
@@ -75,7 +75,8 @@ pub fn save(
 #[allow(clippy::result_large_err)]
 pub fn load(name: &str) -> Result<Persona> {
     let path = profile_path(name)?;
-    let bytes = std::fs::read(&path).map_err(|_| EngineError::UntrainedProfile(name.to_string()))?;
+    let bytes =
+        std::fs::read(&path).map_err(|_| EngineError::UntrainedProfile(name.to_string()))?;
     let stored: StoredProfile = serde_json::from_slice(&bytes)
         .map_err(|e| EngineError::Training(format!("failed to parse profile {name:?}: {e}")))?;
     Ok(stored.persona)
@@ -88,6 +89,8 @@ mod tests {
     #[test]
     fn loading_an_unsaved_profile_is_untrained_error() {
         let err = load("definitely-never-trained-xyz").unwrap_err();
-        assert!(matches!(err, EngineError::UntrainedProfile(name) if name == "definitely-never-trained-xyz"));
+        assert!(
+            matches!(err, EngineError::UntrainedProfile(name) if name == "definitely-never-trained-xyz")
+        );
     }
 }

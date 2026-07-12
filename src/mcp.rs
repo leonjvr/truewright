@@ -1,4 +1,4 @@
-//! `aib mcp` — runs the `browser` MCP server over stdio (mcp-server spec:
+//! `truewright mcp` — runs the `browser` MCP server over stdio (mcp-server spec:
 //! "Stdio MCP transport") or, with `--http`, over a loopback-only,
 //! bearer-token-authenticated HTTP listener (mcp-streamable-http spec).
 
@@ -6,7 +6,7 @@ use axum::extract::{Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use mcp_server::{AgentConfig, AibTools};
+use mcp_server::{AgentConfig, TruewrightTools};
 use rmcp::transport::stdio;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
@@ -20,7 +20,7 @@ pub async fn run(
     browser_pref: cdp::launch::BrowserPreference,
     agent: Option<AgentConfig>,
 ) -> std::process::ExitCode {
-    let service = match AibTools::with_browser_pref(headless, browser_pref)
+    let service = match TruewrightTools::with_browser_pref(headless, browser_pref)
         .with_agent(agent)
         .serve(stdio())
         .await
@@ -42,7 +42,7 @@ pub async fn run(
 
 /// Builds the streamable-HTTP router: the MCP endpoint at `/mcp`, gated by
 /// a bearer-token middleware layer (mcp-streamable-http spec: "Bearer-token
-/// authentication"). Each new MCP session gets its own `AibTools` with a
+/// authentication"). Each new MCP session gets its own `TruewrightTools` with a
 /// uniquely-suffixed profile directory (spec: "Independent per-session
 /// browser") -- never a cloned/shared instance, which would put every
 /// session on the same browser (design.md Decision #2).
@@ -56,14 +56,14 @@ pub fn router(
     let config = StreamableHttpServerConfig::default().with_cancellation_token(cancellation_token);
     let factory = move || {
         let suffix: u64 = rand::random();
-        Ok(AibTools::with_profile_name(
+        Ok(TruewrightTools::with_profile_name(
             headless,
             browser_pref,
-            format!("aib-mcp-http-{suffix:016x}"),
+            format!("truewright-mcp-http-{suffix:016x}"),
         )
         .with_agent(agent.clone()))
     };
-    let service: StreamableHttpService<AibTools, LocalSessionManager> =
+    let service: StreamableHttpService<TruewrightTools, LocalSessionManager> =
         StreamableHttpService::new(factory, Default::default(), config);
 
     let token: Arc<str> = Arc::from(token);
@@ -118,8 +118,8 @@ pub async fn run_http(
         .local_addr()
         .expect("a bound TcpListener always has a local address");
 
-    eprintln!("aib mcp: listening on http://{addr}/mcp");
-    eprintln!("aib mcp: bearer token: {token}");
+    eprintln!("truewright mcp: listening on http://{addr}/mcp");
+    eprintln!("truewright mcp: bearer token: {token}");
 
     let cancellation_token = CancellationToken::new();
     let app = router(

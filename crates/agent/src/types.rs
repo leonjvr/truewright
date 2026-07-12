@@ -4,7 +4,7 @@ use engine::Session;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-/// The exact shape `AibTools` (crates/mcp) already stores its own session
+/// The exact shape `TruewrightTools` (crates/mcp) already stores its own session
 /// in -- so the CLI (which owns its session outright) and the MCP tool
 /// (which shares the session with every other `browser_*` tool) drive the
 /// same harness code, not two implementations.

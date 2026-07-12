@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 /// Loads `name`'s saved trace, renders it, writes `<name>.html` next to
 /// the `.jsonl` trace, and returns the output path -- the one function
-/// both `aib trace view` and `browser_render_trace` call into.
+/// both `truewright trace view` and `browser_render_trace` call into.
 // EngineError is kept as one flat enum (matches cdp::CdpError's
 // rationale); see the identical allow in cdp/src/launch.rs.
 #[allow(clippy::result_large_err)]
@@ -49,7 +49,7 @@ pub fn render_html(entries: &[TraceEntry]) -> Result<String> {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>aib trace</title>
+<title>truewright trace</title>
 <style>
   body {{ font-family: system-ui, sans-serif; background: #1e1e1e; color: #ddd; margin: 0; padding: 24px; }}
   h1 {{ font-size: 16px; font-weight: 600; color: #fff; margin: 0 0 16px; }}
@@ -66,7 +66,7 @@ pub fn render_html(entries: &[TraceEntry]) -> Result<String> {
 </style>
 </head>
 <body>
-<h1>aib trace &mdash; {count} entries</h1>
+<h1>truewright trace &mdash; {count} entries</h1>
 {rows}
 </body>
 </html>
@@ -109,7 +109,11 @@ fn write_row(out: &mut String, entry: &TraceEntry, start: f64) -> Result<()> {
         }
         TraceEntry::Action { text, .. } => {
             let is_failed_assert = text.starts_with("assert ") && text.ends_with("fail");
-            let row_class = if is_failed_assert { "row action fail" } else { "row action" };
+            let row_class = if is_failed_assert {
+                "row action fail"
+            } else {
+                "row action"
+            };
             let _ = writeln!(
                 out,
                 r#"<div class="{row_class}"><span class="t">{elapsed}</span><span class="kind action">action</span><span class="text">{text}</span></div>"#,
@@ -149,21 +153,41 @@ mod tests {
     #[test]
     fn entries_render_sorted_by_timestamp_regardless_of_input_order() {
         let entries = vec![
-            TraceEntry::Action { text: "second".into(), timestamp_ms: 200.0 },
-            TraceEntry::Console { level: "log".into(), text: "first".into(), timestamp_ms: 100.0 },
+            TraceEntry::Action {
+                text: "second".into(),
+                timestamp_ms: 200.0,
+            },
+            TraceEntry::Console {
+                level: "log".into(),
+                text: "first".into(),
+                timestamp_ms: 100.0,
+            },
         ];
         let html = render_html(&entries).expect("renders");
         let first_pos = html.find("first").expect("first present");
         let second_pos = html.find("second").expect("second present");
-        assert!(first_pos < second_pos, "entries should render in chronological order");
+        assert!(
+            first_pos < second_pos,
+            "entries should render in chronological order"
+        );
     }
 
     #[test]
     fn entry_kinds_get_distinct_styling_classes() {
         let entries = vec![
-            TraceEntry::Console { level: "log".into(), text: "c".into(), timestamp_ms: 0.0 },
-            TraceEntry::Exception { text: "e".into(), timestamp_ms: 1.0 },
-            TraceEntry::Action { text: "a".into(), timestamp_ms: 2.0 },
+            TraceEntry::Console {
+                level: "log".into(),
+                text: "c".into(),
+                timestamp_ms: 0.0,
+            },
+            TraceEntry::Exception {
+                text: "e".into(),
+                timestamp_ms: 1.0,
+            },
+            TraceEntry::Action {
+                text: "a".into(),
+                timestamp_ms: 2.0,
+            },
         ];
         let html = render_html(&entries).expect("renders");
         assert!(html.contains("row console"));

@@ -1,7 +1,7 @@
 # agent-harness Specification
 
 ## Purpose
-Run a configured LLM driver role as `aib`'s own autonomous agent, driving a browser session through a tool-calling loop with recoverable-failure feedback, context pruning, capability-flag-routed vision, and attachable skills, without depending on an external MCP host to supply the model.
+Run a configured LLM driver role as `truewright`'s own autonomous agent, driving a browser session through a tool-calling loop with recoverable-failure feedback, context pruning, capability-flag-routed vision, and attachable skills, without depending on an external MCP host to supply the model.
 ## Requirements
 ### Requirement: Autonomous tool-calling loop over a browser session
 The system SHALL run a configured LLM driver role in a loop that calls browser tools against a session, feeding each tool's result back to the model, until the model signals completion or failure, or a step/time budget is exhausted.
@@ -59,17 +59,17 @@ The system SHALL resolve named skills from Markdown files (searched project-loca
 - **THEN** the run fails clearly identifying the missing skill, rather than silently proceeding without it
 
 ### Requirement: CLI to run a task autonomously
-The system SHALL provide an `aib agent <task>` command that runs the task to completion using the configured (or overridden) driver role, printing live step progress, and exiting with a status code reflecting the outcome.
+The system SHALL provide a `truewright agent <task>` command that runs the task to completion using the configured (or overridden) driver role, printing live step progress, and exiting with a status code reflecting the outcome.
 
 #### Scenario: A completed task exits successfully
-- **WHEN** `aib agent <task>` runs to a passing outcome
+- **WHEN** `truewright agent <task>` runs to a passing outcome
 - **THEN** it prints the final summary and exits with a success code
 
 #### Scenario: A failed task exits with a failure code
-- **WHEN** `aib agent <task>` runs to a failing outcome, or hits a step/time budget, or a no-progress condition
+- **WHEN** `truewright agent <task>` runs to a failing outcome, or hits a step/time budget, or a no-progress condition
 - **THEN** it prints the reason and exits with a non-zero failure code
 
 #### Scenario: Driver/vision can be overridden without editing config
-- **WHEN** `aib agent` is run with a `<provider>/<model>` override for the driver or vision role
+- **WHEN** `truewright agent` is run with a `<provider>/<model>` override for the driver or vision role
 - **THEN** that provider and model are used directly for the run, without requiring a matching `[roles.*]` entry in the config file
 

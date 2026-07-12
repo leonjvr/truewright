@@ -29,7 +29,9 @@ pub struct Cassette {
 // see the identical allow in cdp/src/launch.rs.
 #[allow(clippy::result_large_err)]
 fn cassettes_dir() -> Result<PathBuf> {
-    Ok(cdp::launch::profile_base_dir()?.join("aib").join("network"))
+    Ok(cdp::launch::profile_base_dir()?
+        .join("truewright")
+        .join("network"))
 }
 
 #[allow(clippy::result_large_err)]
@@ -62,8 +64,7 @@ pub fn save(name: &str, cassette: &Cassette) -> Result<PathBuf> {
 #[allow(clippy::result_large_err)]
 pub fn load(name: &str) -> Result<Cassette> {
     let path = cassette_path(name)?;
-    let bytes =
-        std::fs::read(&path).map_err(|_| EngineError::UnknownCassette(name.to_string()))?;
+    let bytes = std::fs::read(&path).map_err(|_| EngineError::UnknownCassette(name.to_string()))?;
     serde_json::from_slice(&bytes)
         .map_err(|e| EngineError::Network(format!("failed to parse cassette {name:?}: {e}")))
 }
@@ -75,6 +76,8 @@ mod tests {
     #[test]
     fn loading_an_unsaved_cassette_is_a_typed_error() {
         let err = load("definitely-never-recorded-xyz").unwrap_err();
-        assert!(matches!(err, EngineError::UnknownCassette(name) if name == "definitely-never-recorded-xyz"));
+        assert!(
+            matches!(err, EngineError::UnknownCassette(name) if name == "definitely-never-recorded-xyz")
+        );
     }
 }

@@ -1,20 +1,20 @@
 function (bindingName, action) {
   if (action === 'stop') {
-    if (window.__aibTrain) {
-      window.__aibTrain.handlers.forEach(function (h) {
+    if (window.__truewrightTrain) {
+      window.__truewrightTrain.handlers.forEach(function (h) {
         document.removeEventListener(h.type, h.fn, true);
       });
-      window.__aibTrain = null;
+      window.__truewrightTrain = null;
     }
     return { ok: true };
   }
 
-  if (window.__aibTrain) {
+  if (window.__truewrightTrain) {
     return { ok: false, reason: 'already training' };
   }
 
   function report(sample) {
-    // window.__aibSuppressTraining is toggled by this engine's own
+    // window.__truewrightSuppressTraining is toggled by this engine's own
     // click/type/press dispatch for the duration of each action while
     // training is active -- CDP-dispatched Input.dispatch*Event calls are
     // themselves isTrusted === true in Chrome (verified: isTrusted does NOT
@@ -23,7 +23,7 @@ function (bindingName, action) {
     // suppress flag is the actual guard; isTrusted still excludes a page's
     // own untrusted JS-dispatched events (human-motion spec: "Synthetic
     // dispatch is not captured as training data").
-    if (window.__aibSuppressTraining) return;
+    if (window.__truewrightSuppressTraining) return;
     window[bindingName](JSON.stringify(sample));
   }
 
@@ -59,6 +59,6 @@ function (bindingName, action) {
     document.addEventListener(h.type, h.fn, true);
   });
 
-  window.__aibTrain = { handlers: handlers };
+  window.__truewrightTrain = { handlers: handlers };
   return { ok: true };
 }

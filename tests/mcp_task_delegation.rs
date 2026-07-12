@@ -61,7 +61,7 @@ fn agent_config(driver: RoleClient, vision: Option<RoleClient>) -> AgentConfig {
 
 async fn spawn_server(agent: Option<AgentConfig>) -> (String, CancellationToken) {
     let cancellation_token = CancellationToken::new();
-    let app = aib::mcp::router(
+    let app = truewright::mcp::router(
         true,
         cdp::launch::BrowserPreference::Auto,
         TOKEN.to_string(),
