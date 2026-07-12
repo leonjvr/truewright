@@ -22,6 +22,9 @@ pub enum LlmError {
     #[error("role {role:?} references unknown provider {provider:?} (not defined under [providers] in config)")]
     UnknownProvider { role: String, provider: String },
 
+    #[error("unknown provider {0:?} (not defined under [providers] in config)")]
+    UnknownProviderDirect(String),
+
     #[error("provider {provider:?} has no credential configured -- set api_key or api_key_env under [providers.{provider}]")]
     NoCredentialConfigured { provider: String },
 

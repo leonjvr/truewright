@@ -179,45 +179,32 @@ impl Config {
             .roles
             .get(name)
             .ok_or_else(|| LlmError::UnknownRole(name.to_string()))?;
-        let provider =
-            self.providers
-                .get(&role.provider)
-                .ok_or_else(|| LlmError::UnknownProvider {
-                    role: name.to_string(),
-                    provider: role.provider.clone(),
-                })?;
-
-        let client = match provider.kind {
-            ProviderKind::OpenAiCompat => {
-                let base_url =
-                    provider
-                        .base_url
-                        .clone()
-                        .ok_or_else(|| LlmError::UnknownProvider {
-                            role: name.to_string(),
-                            provider: role.provider.clone(),
-                        })?;
-                let credential = self.resolve_credential(provider, &role.provider)?;
-                Client::Compat(CompatClient::new(
-                    base_url,
-                    credential,
-                    provider.headers.clone(),
-                ))
-            }
-            ProviderKind::OpenAiResponses => {
-                let base_url = provider
-                    .base_url
-                    .clone()
-                    .unwrap_or_else(|| CHATGPT_CODEX_BASE_URL.to_string());
-                let credential = self.resolve_credential(provider, &role.provider)?;
-                Client::Responses(ResponsesClient::new(base_url, credential))
-            }
-        };
-
+        let client = self.resolve_client_for_provider(&role.provider, Some(name))?;
         Ok(RoleClient {
             client,
             model: role.model.clone(),
             vision: role.vision,
+        })
+    }
+
+    /// Resolves a role directly from a configured provider name and a
+    /// model string, bypassing `[roles.*]` entirely -- backs the CLI's
+    /// `--driver <provider>/<model>` / `--vision <provider>/<model>`
+    /// overrides (agent-harness spec), so a one-off run doesn't need a
+    /// `[roles.driver]` table just to point at an already-configured
+    /// provider with a different model.
+    #[allow(clippy::result_large_err)]
+    pub fn resolve_provider_model(
+        &self,
+        provider_name: &str,
+        model: &str,
+        vision: bool,
+    ) -> Result<RoleClient> {
+        let client = self.resolve_client_for_provider(provider_name, None)?;
+        Ok(RoleClient {
+            client,
+            model: model.to_string(),
+            vision,
         })
     }
 
@@ -226,6 +213,48 @@ impl Config {
     /// the agent loop checking for an optional vision role).
     pub fn has_role(&self, name: &str) -> bool {
         self.roles.contains_key(name)
+    }
+
+    /// `role_name`: `Some("driver")` when resolving via `[roles.*]`
+    /// (error mentions both the role and the provider); `None` when
+    /// resolving a provider directly (error mentions only the provider --
+    /// there's no role name to report).
+    #[allow(clippy::result_large_err)]
+    fn resolve_client_for_provider(
+        &self,
+        provider_name: &str,
+        role_name: Option<&str>,
+    ) -> Result<Client> {
+        let not_found = || match role_name {
+            Some(role) => LlmError::UnknownProvider {
+                role: role.to_string(),
+                provider: provider_name.to_string(),
+            },
+            None => LlmError::UnknownProviderDirect(provider_name.to_string()),
+        };
+        let provider = self.providers.get(provider_name).ok_or_else(not_found)?;
+
+        match provider.kind {
+            ProviderKind::OpenAiCompat => {
+                let base_url = provider.base_url.clone().ok_or_else(not_found)?;
+                let credential = self.resolve_credential(provider, provider_name)?;
+                Ok(Client::Compat(CompatClient::new(
+                    base_url,
+                    credential,
+                    provider.headers.clone(),
+                )))
+            }
+            ProviderKind::OpenAiResponses => {
+                let base_url = provider
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| CHATGPT_CODEX_BASE_URL.to_string());
+                let credential = self.resolve_credential(provider, provider_name)?;
+                Ok(Client::Responses(ResponsesClient::new(
+                    base_url, credential,
+                )))
+            }
+        }
     }
 
     #[allow(clippy::result_large_err)]
@@ -302,6 +331,35 @@ mod tests {
         assert_eq!(role.model, "deepseek-chat");
         assert!(!role.vision);
         assert!(matches!(role.client, Client::Compat(_)));
+    }
+
+    #[test]
+    fn resolve_provider_model_bypasses_roles_entirely() {
+        let path = write_temp_toml(
+            "provider-model-direct",
+            r#"
+                [providers.deepseek]
+                kind = "openai-compat"
+                base_url = "https://api.deepseek.com/v1"
+                api_key = "sk-literal-test-key"
+            "#,
+        );
+        let config = Config::load(&PathBuf::from("unused"), Some(&path)).expect("config parses");
+        std::fs::remove_file(&path).ok();
+
+        // No [roles.*] at all -- resolve_role would fail here.
+        assert!(config.resolve_role("driver").is_err());
+
+        let role = config
+            .resolve_provider_model("deepseek", "deepseek-reasoner", true)
+            .expect("direct provider/model resolution succeeds with no [roles] table");
+        assert_eq!(role.model, "deepseek-reasoner");
+        assert!(role.vision);
+
+        match config.resolve_provider_model("not-a-real-provider", "whatever", false) {
+            Err(LlmError::UnknownProviderDirect(name)) => assert_eq!(name, "not-a-real-provider"),
+            other => panic!("expected UnknownProviderDirect, got a different result (RoleClient isn't Debug): {}", other.is_ok()),
+        }
     }
 
     #[test]

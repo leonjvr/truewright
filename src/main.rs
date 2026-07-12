@@ -1,3 +1,4 @@
+mod agent_cmd;
 mod doctor;
 
 use aib::mcp;
@@ -90,6 +91,49 @@ enum Command {
     Auth {
         #[command(subcommand)]
         action: AuthCommand,
+    },
+    /// Runs `task` autonomously using a configured LLM role as the driver
+    /// (agent-harness spec) -- `aib` drives its own browser session
+    /// end to end, printing live step progress. Exit code 0 on
+    /// task_complete, 1 on task_failed/timeout/step-budget exhaustion, 2
+    /// on a config/launch error.
+    Agent {
+        /// The task, in natural language.
+        task: String,
+        /// A skill name to attach (repeatable). Resolved from
+        /// ./.aib/skills/, then <data-dir>/aib/skills/.
+        #[arg(long = "skill")]
+        skills: Vec<String>,
+        /// Overrides [roles.driver] with a specific provider/model pair
+        /// (e.g. "deepseek/deepseek-chat"), bypassing [roles.*] entirely.
+        #[arg(long)]
+        driver: Option<String>,
+        /// Overrides [roles.vision] the same way --driver overrides
+        /// [roles.driver].
+        #[arg(long)]
+        vision: Option<String>,
+        /// Overrides [agent].max_steps.
+        #[arg(long)]
+        max_steps: Option<u32>,
+        /// Launch the browser headed instead of headless.
+        #[arg(long)]
+        headed: bool,
+        /// Browser selection for headless runs.
+        #[arg(long, value_enum, default_value_t = BrowserArg::Auto)]
+        browser: BrowserArg,
+        /// Profile name (isolated browser profile dir). Fixed by default
+        /// so repeated runs are deterministic, matching stdio-MCP's own
+        /// posture.
+        #[arg(long, default_value = "aib-agent")]
+        profile: String,
+        /// Explicit config file path, overriding AIB_CONFIG / ./aib.toml /
+        /// the per-user data dir default.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Emit one JSON object per event on stdout instead of the
+        /// human-readable progress lines, for scripting.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -187,6 +231,32 @@ async fn main() -> std::process::ExitCode {
             AuthCommand::Status => auth_status(),
             AuthCommand::Logout { flow } => auth_logout(&flow),
         },
+        Command::Agent {
+            task,
+            skills,
+            driver,
+            vision,
+            max_steps,
+            headed,
+            browser,
+            profile,
+            config,
+            json,
+        } => {
+            agent_cmd::run(
+                &task,
+                &skills,
+                driver.as_deref(),
+                vision.as_deref(),
+                max_steps,
+                headed,
+                browser.into(),
+                &profile,
+                config,
+                json,
+            )
+            .await
+        }
     }
 }
 
@@ -249,7 +319,7 @@ async fn llm_ping(role: &str, config_path: Option<PathBuf>) -> std::process::Exi
 // #5); boxing it here too would ripple through call sites for marginal
 // benefit at this size.
 #[allow(clippy::result_large_err)]
-fn resolve_aib_data_dir() -> cdp::error::Result<PathBuf> {
+pub(crate) fn resolve_aib_data_dir() -> cdp::error::Result<PathBuf> {
     cdp::launch::profile_base_dir().map(|dir| dir.join("aib"))
 }
 

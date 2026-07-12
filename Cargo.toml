@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cdp", "crates/engine", "crates/mcp", "crates/llm"]
+members = ["crates/cdp", "crates/engine", "crates/mcp", "crates/llm", "crates/agent"]
 
 [workspace.package]
 edition = "2021"
@@ -53,6 +53,7 @@ cdp = { path = "crates/cdp" }
 engine = { path = "crates/engine" }
 mcp-server = { path = "crates/mcp" }
 llm = { path = "crates/llm" }
+agent = { path = "crates/agent" }
 rmcp = { workspace = true, features = ["transport-streamable-http-server"] }
 sysinfo.workspace = true
 axum.workspace = true
