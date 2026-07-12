@@ -30,5 +30,5 @@
 ## 5. Wrap-up
 - [x] 5.1 Update README
 - [x] 5.2 Update PROPOSAL.md's roadmap
-- [ ] 5.3 `openspec archive mcp-task-delegation -y`
-- [ ] 5.4 Three commits: Propose, Implement, Sync-specs-and-archive
+- [x] 5.3 `openspec archive mcp-task-delegation -y`
+- [x] 5.4 Three commits: Propose, Implement, Sync-specs-and-archive
