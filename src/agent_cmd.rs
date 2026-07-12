@@ -39,7 +39,9 @@ pub async fn run(
         Ok(rc) => rc,
         Err(e) => {
             eprintln!("failed to resolve driver role: {e}");
-            eprintln!("configure [roles.driver] in your config, or pass --driver <provider>/<model>.");
+            eprintln!(
+                "configure [roles.driver] in your config, or pass --driver <provider>/<model>."
+            );
             return std::process::ExitCode::from(2);
         }
     };
@@ -90,7 +92,9 @@ pub async fn run(
         }
     });
 
-    let outcome = harness.run_task(&shared, task, &resolved_skills, None, Some(tx)).await;
+    let outcome = harness
+        .run_task(&shared, task, &resolved_skills, None, Some(tx))
+        .await;
     let _ = render_task.await;
 
     let mut guard = shared.0.lock().await;
@@ -138,7 +142,9 @@ fn resolve_role_or_override(
     match override_value {
         Some(spec) => {
             let (provider, model) = spec.split_once('/').ok_or_else(|| {
-                llm::LlmError::UnknownProviderDirect(format!("{spec:?} (expected \"<provider>/<model>\")"))
+                llm::LlmError::UnknownProviderDirect(format!(
+                    "{spec:?} (expected \"<provider>/<model>\")"
+                ))
             })?;
             config.resolve_provider_model(provider, model, default_vision)
         }
@@ -157,7 +163,9 @@ fn render_event(event: &AgentEvent, json: bool) {
                 serde_json::json!({"type": "tool_result", "name": name, "ok": ok, "summary": summary})
             }
             AgentEvent::Vision { chars } => serde_json::json!({"type": "vision", "chars": chars}),
-            AgentEvent::Done { passed, summary } => serde_json::json!({"type": "done", "passed": passed, "summary": summary}),
+            AgentEvent::Done { passed, summary } => {
+                serde_json::json!({"type": "done", "passed": passed, "summary": summary})
+            }
         };
         println!("{value}");
         return;

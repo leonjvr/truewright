@@ -6,7 +6,7 @@ use axum::extract::{Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use mcp_server::AibTools;
+use mcp_server::{AgentConfig, AibTools};
 use rmcp::transport::stdio;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
@@ -18,8 +18,10 @@ use tokio_util::sync::CancellationToken;
 pub async fn run(
     headless: bool,
     browser_pref: cdp::launch::BrowserPreference,
+    agent: Option<AgentConfig>,
 ) -> std::process::ExitCode {
     let service = match AibTools::with_browser_pref(headless, browser_pref)
+        .with_agent(agent)
         .serve(stdio())
         .await
     {
@@ -49,6 +51,7 @@ pub fn router(
     browser_pref: cdp::launch::BrowserPreference,
     token: String,
     cancellation_token: CancellationToken,
+    agent: Option<AgentConfig>,
 ) -> axum::Router {
     let config = StreamableHttpServerConfig::default().with_cancellation_token(cancellation_token);
     let factory = move || {
@@ -57,7 +60,8 @@ pub fn router(
             headless,
             browser_pref,
             format!("aib-mcp-http-{suffix:016x}"),
-        ))
+        )
+        .with_agent(agent.clone()))
     };
     let service: StreamableHttpService<AibTools, LocalSessionManager> =
         StreamableHttpService::new(factory, Default::default(), config);
@@ -99,6 +103,7 @@ pub async fn run_http(
     browser_pref: cdp::launch::BrowserPreference,
     port: u16,
     token: Option<String>,
+    agent: Option<AgentConfig>,
 ) -> std::process::ExitCode {
     let token = token.unwrap_or_else(generate_token);
 
@@ -117,7 +122,13 @@ pub async fn run_http(
     eprintln!("aib mcp: bearer token: {token}");
 
     let cancellation_token = CancellationToken::new();
-    let app = router(headless, browser_pref, token, cancellation_token.clone());
+    let app = router(
+        headless,
+        browser_pref,
+        token,
+        cancellation_token.clone(),
+        agent,
+    );
 
     tokio::spawn({
         let cancellation_token = cancellation_token.clone();

@@ -12,12 +12,19 @@ use tokio_util::sync::CancellationToken;
 const TOKEN: &str = "test-only-token-do-not-reuse";
 
 async fn spawn_server() -> (String, CancellationToken) {
+    spawn_server_with_agent(None).await
+}
+
+async fn spawn_server_with_agent(
+    agent: Option<mcp_server::AgentConfig>,
+) -> (String, CancellationToken) {
     let cancellation_token = CancellationToken::new();
     let app = aib::mcp::router(
         true,
         cdp::launch::BrowserPreference::Auto,
         TOKEN.to_string(),
         cancellation_token.clone(),
+        agent,
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await

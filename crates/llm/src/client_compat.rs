@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+#[derive(Clone)]
 pub struct CompatClient {
     http: reqwest::Client,
     base_url: String,

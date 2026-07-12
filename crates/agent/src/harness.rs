@@ -17,6 +17,7 @@ use tokio::sync::mpsc::Sender;
 /// run as stuck -- one nudge is given a chance to work before giving up.
 const MAX_CONSECUTIVE_NUDGES: u32 = 2;
 
+#[derive(Clone)]
 pub struct Harness {
     pub driver: RoleClient,
     pub vision: Option<RoleClient>,

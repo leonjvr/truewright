@@ -74,6 +74,14 @@ enum Command {
         /// printed once if not given.
         #[arg(long)]
         token: Option<String>,
+        /// Explicit config file path, overriding AIB_CONFIG / ./aib.toml /
+        /// the per-user data dir default. Used to resolve [roles.driver]/
+        /// [roles.vision] for browser_run_task and screenshot
+        /// interpretation (mcp-task-delegation spec); the server keeps
+        /// working with those tools reporting a clear error if no driver
+        /// role is configured.
+        #[arg(long)]
+        config: Option<PathBuf>,
     },
     /// Render or inspect saved traces (html-trace-viewer spec).
     Trace {
@@ -204,11 +212,13 @@ async fn main() -> std::process::ExitCode {
             http,
             port,
             token,
+            config,
         } => {
+            let agent_config = build_mcp_agent_config(config.as_deref());
             if http {
-                mcp::run_http(!headed, browser.into(), port, token).await
+                mcp::run_http(!headed, browser.into(), port, token, agent_config).await
             } else {
-                mcp::run(!headed, browser.into()).await
+                mcp::run(!headed, browser.into(), agent_config).await
             }
         }
         Command::Trace { action } => match action {
@@ -260,6 +270,49 @@ async fn main() -> std::process::ExitCode {
     }
 }
 
+/// Builds the optional agent config `aib mcp` threads into every
+/// `AibTools` it creates. A missing config file (or a valid one with no
+/// `[roles.driver]`) is the ordinary, zero-LLM-setup case -- silently
+/// `None`, every browser-only tool keeps working exactly as before this
+/// capability existed. A config file that *fails to parse* is different:
+/// the user clearly meant to configure something, so it's a one-line
+/// stderr warning, not silence (mcp-task-delegation design.md Decision
+/// #5).
+fn build_mcp_agent_config(
+    config_path: Option<&std::path::Path>,
+) -> Option<mcp_server::AgentConfig> {
+    let aib_data_dir = resolve_aib_data_dir()
+        .inspect_err(|e| eprintln!("aib mcp: failed to resolve per-user data directory: {e}"))
+        .ok()?;
+
+    let config = match llm::Config::load(&aib_data_dir, config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "aib mcp: failed to load LLM config ({e}); browser_run_task and screenshot \
+                 interpretation will be unavailable until it's fixed"
+            );
+            return None;
+        }
+    };
+
+    let driver = config.resolve_role("driver").ok()?;
+    let vision = config.resolve_role("vision").ok();
+    let harness = std::sync::Arc::new(agent::Harness {
+        driver,
+        vision,
+        max_steps: config.agent.max_steps,
+        step_timeout: std::time::Duration::from_secs(config.agent.step_timeout_secs),
+        task_timeout: std::time::Duration::from_secs(config.agent.task_timeout_secs),
+        max_retained_snapshots: config.agent.max_retained_snapshots,
+    });
+    let skill_dirs = agent::default_skill_dirs(&aib_data_dir, &config.skills.dirs);
+    Some(mcp_server::AgentConfig {
+        harness,
+        skill_dirs,
+    })
+}
+
 /// Resolves `role` from config and sends one trivial completion, printing
 /// model/latency/reply -- the live-verification hook for the llm-providers
 /// change (no browser session involved at all).
@@ -301,7 +354,10 @@ async fn llm_ping(role: &str, config_path: Option<PathBuf>) -> std::process::Exi
     match role_client.complete(req).await {
         Ok(resp) => {
             let elapsed = start.elapsed();
-            println!("role={role} model={} latency={elapsed:?}", role_client.model);
+            println!(
+                "role={role} model={} latency={elapsed:?}",
+                role_client.model
+            );
             println!("reply: {}", resp.message.text());
             std::process::ExitCode::SUCCESS
         }

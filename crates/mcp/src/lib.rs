@@ -5,8 +5,27 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{schemars, tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+/// Everything `browser_run_task`/`browser_screenshot(interpret: true)` need:
+/// a driver (and optional vision) role resolved into a `Harness`, plus the
+/// directories `skills` request params resolve against -- bundled into one
+/// type rather than two independent `Option`s on `AibTools` so "no LLM
+/// configured" and "LLM configured" stay the only two reachable states
+/// (mcp-task-delegation design.md Decision #1).
+#[derive(Clone)]
+pub struct AgentConfig {
+    pub harness: Arc<agent::Harness>,
+    pub skill_dirs: Vec<PathBuf>,
+}
+
+/// Lower than `aib agent`'s own config-driven default (typically 40) --
+/// a delegated task is more likely to run inside an outer MCP host's own
+/// tool-call timeout budget than a human watching a terminal
+/// (mcp-task-delegation design.md Decision #3).
+const DEFAULT_MCP_MAX_STEPS: u32 = 25;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct NavigateRequest {
@@ -195,6 +214,51 @@ pub struct SwitchPageRequest {
     pub page_id: String,
 }
 
+#[derive(Debug, Default, serde::Deserialize, schemars::JsonSchema)]
+pub struct ScreenshotRequest {
+    #[serde(default)]
+    #[schemars(
+        description = "If true, route the screenshot through the configured vision role and return its text interpretation instead of the raw image -- for a caller with no vision of its own. Requires [roles.vision] configured; fails clearly otherwise."
+    )]
+    pub interpret: bool,
+    #[serde(default)]
+    #[schemars(
+        description = "Guidance for the vision interpretation (only used with interpret: true); a sensible default is used if omitted"
+    )]
+    pub guidance: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize, schemars::JsonSchema)]
+pub struct RecordStopRequest {
+    #[serde(default)]
+    #[schemars(
+        description = "If true, route the preview frame through the configured vision role and return its text interpretation instead of the raw image. Requires [roles.vision] configured; fails clearly otherwise."
+    )]
+    pub interpret: bool,
+    #[serde(default)]
+    #[schemars(
+        description = "Guidance for the vision interpretation (only used with interpret: true); a sensible default is used if omitted"
+    )]
+    pub guidance: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RunTaskRequest {
+    #[schemars(description = "The task to run, in natural language")]
+    pub task: String,
+    #[serde(default)]
+    #[schemars(description = "Extra guidance appended to the task's system prompt")]
+    pub guidance: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Skill names to attach, resolved the same way as `aib agent --skill`"
+    )]
+    pub skills: Vec<String>,
+    #[serde(default)]
+    #[schemars(description = "Overrides the default step budget for this call (default 25)")]
+    pub max_steps: Option<u32>,
+}
+
 #[derive(Clone)]
 pub struct AibTools {
     session: Arc<Mutex<Option<engine::Session>>>,
@@ -212,6 +276,11 @@ pub struct AibTools {
     /// collide on the same Chrome user-data directory (mcp-streamable-http
     /// spec: "Independent per-session browser").
     profile_name: String,
+    /// `None` whenever no `[roles.driver]` is configured -- the ordinary,
+    /// zero-LLM-setup case every browser-only tool must keep working under
+    /// unchanged (mcp-task-delegation spec: "Task delegation to the
+    /// configured agent driver").
+    agent: Option<AgentConfig>,
     // Read by the `#[tool_handler]`-generated `ServerHandler` impl to route
     // incoming `tools/call` requests to the methods below.
     #[allow(dead_code)]
@@ -246,8 +315,19 @@ impl AibTools {
             headless,
             browser_pref,
             profile_name,
+            agent: None,
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Opts this server into task delegation / vision-interpretation
+    /// (mcp-task-delegation design.md Decision #2) -- a consuming builder
+    /// rather than a constructor parameter, so every existing constructor
+    /// and call site (including every pre-existing test) is untouched by a
+    /// field that's `None` in the overwhelming majority of real usage.
+    pub fn with_agent(mut self, agent: Option<AgentConfig>) -> Self {
+        self.agent = agent;
+        self
     }
 
     async fn ensure_session(&self) -> Result<(), McpError> {
@@ -260,6 +340,26 @@ impl AibTools {
             *guard = Some(session);
         }
         Ok(())
+    }
+
+    /// Shared by `browser_screenshot(interpret: true)` and
+    /// `browser_record_stop(interpret: true)`.
+    async fn interpret_image(
+        &self,
+        bytes: &[u8],
+        guidance: Option<&str>,
+    ) -> Result<String, McpError> {
+        let agent_config = self.agent.as_ref().ok_or_else(|| {
+            McpError::invalid_params(
+                "no vision role configured; set [roles.vision] in aib's config.toml",
+                None,
+            )
+        })?;
+        agent_config
+            .harness
+            .interpret_image(bytes, guidance)
+            .await
+            .map_err(map_agent_err)
     }
 
     #[tool(
@@ -571,12 +671,26 @@ impl AibTools {
         )]))
     }
 
-    #[tool(description = "Capture a screenshot of the current page")]
-    async fn browser_screenshot(&self) -> Result<CallToolResult, McpError> {
+    #[tool(
+        description = "Capture a screenshot of the current page. Set interpret: true to get a text description from the configured vision role instead of the image, for a caller with no vision of its own."
+    )]
+    async fn browser_screenshot(
+        &self,
+        Parameters(ScreenshotRequest {
+            interpret,
+            guidance,
+        }): Parameters<ScreenshotRequest>,
+    ) -> Result<CallToolResult, McpError> {
         self.ensure_session().await?;
         let guard = self.session.lock().await;
         let session = guard.as_ref().ok_or_else(no_session_error)?;
         let bytes = session.screenshot().await.map_err(map_engine_err)?;
+        drop(guard);
+
+        if interpret {
+            let text = self.interpret_image(&bytes, guidance.as_deref()).await?;
+            return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
+        }
         let data = base64_encode(&bytes);
         Ok(CallToolResult::success(vec![ContentBlock::image(
             data,
@@ -627,9 +741,15 @@ impl AibTools {
     }
 
     #[tool(
-        description = "Stop the active recording; returns the artifact directory, frame count, duration, and a preview frame"
+        description = "Stop the active recording; returns the artifact directory, frame count, duration, and a preview frame. Set interpret: true to get a text description of the preview frame from the configured vision role instead of the image."
     )]
-    async fn browser_record_stop(&self) -> Result<CallToolResult, McpError> {
+    async fn browser_record_stop(
+        &self,
+        Parameters(RecordStopRequest {
+            interpret,
+            guidance,
+        }): Parameters<RecordStopRequest>,
+    ) -> Result<CallToolResult, McpError> {
         let recording = self
             .recording
             .lock()
@@ -653,7 +773,12 @@ impl AibTools {
 
         let mut content = vec![ContentBlock::text(summary)];
         if let Some(preview) = output.preview_jpeg {
-            content.push(ContentBlock::image(base64_encode(&preview), "image/jpeg"));
+            if interpret {
+                let text = self.interpret_image(&preview, guidance.as_deref()).await?;
+                content.push(ContentBlock::text(text));
+            } else {
+                content.push(ContentBlock::image(base64_encode(&preview), "image/jpeg"));
+            }
         }
         Ok(CallToolResult::success(content))
     }
@@ -855,6 +980,85 @@ impl AibTools {
         ))]))
     }
 
+    #[tool(
+        description = "Delegate a whole sub-task to aib's own configured LLM driver, which autonomously drives THIS session's browser (navigate/click/type/snapshot/assert/etc.) until it signals completion or failure. Runs on the same session as every other browser_* tool -- don't call other browser_* tools while this is running. Requires [roles.driver] configured in aib's config.toml; fails with a clear invalid-params error if none is configured. Returns a compact step transcript followed by the outcome; a failed task is a tool-level error result, like browser_assert."
+    )]
+    async fn browser_run_task(
+        &self,
+        Parameters(RunTaskRequest {
+            task,
+            guidance,
+            skills,
+            max_steps,
+        }): Parameters<RunTaskRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let agent_config = self.agent.as_ref().ok_or_else(|| {
+            McpError::invalid_params(
+                "no agent driver configured; set [roles.driver] in aib's config.toml (see `aib llm ping driver`)",
+                None,
+            )
+        })?;
+        self.ensure_session().await?;
+
+        let resolved_skills =
+            agent::resolve_skills(&skills, &agent_config.skill_dirs).map_err(map_agent_err)?;
+
+        // A one-off clone with the MCP-specific default/override applied,
+        // never mutating the shared `Arc<Harness>` (mcp-task-delegation
+        // design.md Decision #3).
+        let harness = agent::Harness {
+            max_steps: max_steps.unwrap_or(DEFAULT_MCP_MAX_STEPS),
+            ..(*agent_config.harness).clone()
+        };
+        let shared = agent::SharedSession::from_arc(self.session.clone());
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        let transcript_task = tokio::spawn(async move {
+            let mut lines = Vec::new();
+            while let Some(event) = rx.recv().await {
+                if let Some(line) = transcript_line(&event) {
+                    lines.push(line);
+                }
+            }
+            lines
+        });
+
+        let outcome = harness
+            .run_task(
+                &shared,
+                &task,
+                &resolved_skills,
+                guidance.as_deref(),
+                Some(tx),
+            )
+            .await;
+        let transcript = transcript_task.await.unwrap_or_default();
+        let mut text = transcript.join("\n");
+        if !text.is_empty() {
+            text.push('\n');
+        }
+
+        match outcome {
+            Ok(result) => {
+                text.push_str(&format!(
+                    "{} ({} steps): {}",
+                    if result.passed { "PASS" } else { "FAIL" },
+                    result.steps_used,
+                    result.summary
+                ));
+                if result.passed {
+                    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+                } else {
+                    Ok(CallToolResult::error(vec![ContentBlock::text(text)]))
+                }
+            }
+            Err(e) => {
+                text.push_str(&format!("agent run failed: {e}"));
+                Ok(CallToolResult::error(vec![ContentBlock::text(text)]))
+            }
+        }
+    }
+
     #[tool(description = "Close the browser session")]
     async fn browser_close(&self) -> Result<CallToolResult, McpError> {
         let mut guard = self.session.lock().await;
@@ -880,8 +1084,11 @@ impl ServerHandler for AibTools {
                 "Drives a real Chrome/Edge browser. Tools: browser_navigate(url), \
                  browser_snapshot(), browser_click(ref, human_like?, persona?, trained_profile?, seed?, true_input?), \
                  browser_type(ref, text, submit?, human_like?, persona?, trained_profile?, seed?, true_input?), \
-                 browser_press(key), browser_wait_for(text, timeout_ms?), browser_screenshot(), \
-                 browser_record_start(max_duration_ms?, quality?), browser_record_stop(), \
+                 browser_press(key), browser_wait_for(text, timeout_ms?), \
+                 browser_screenshot(interpret?, guidance?), \
+                 browser_record_start(max_duration_ms?, quality?), \
+                 browser_record_stop(interpret?, guidance?), \
+                 browser_run_task(task, guidance?, skills?, max_steps?), \
                  browser_train_start(name), browser_train_stop(), \
                  browser_network_record_start(name), browser_network_record_stop(), \
                  browser_network_replay_start(name), browser_network_replay_stop(), \
@@ -947,7 +1154,16 @@ impl ServerHandler for AibTools {
                  input (SendInput) instead of CDP -- the actual system mouse cursor moves and clicks for \
                  real, and real keystrokes are sent, unlike every other mode here which is still \
                  CDP-synthesized even though Chrome marks it isTrusted; Windows-only, headed sessions \
-                 only, rejected with a clear error otherwise."
+                 only, rejected with a clear error otherwise. If an LLM driver role is configured on \
+                 this server, browser_run_task(task, guidance?, skills?, max_steps?) delegates a whole \
+                 sub-task to that driver, which autonomously drives this same session until it signals \
+                 completion or failure -- do not call other browser_* tools while it's running; it \
+                 returns a step transcript plus a PASS/FAIL outcome, with a failed task reported as a \
+                 tool-level error like browser_assert. Set interpret: true on browser_screenshot or \
+                 browser_record_stop to get a text description from the configured vision role instead \
+                 of the raw image, for a caller with no vision of its own; omitting it keeps returning \
+                 the image exactly as before. Both require LLM roles configured in aib's config.toml -- \
+                 they fail with a clear error, not a crash, when none is set up."
                     .to_string(),
             )
     }
@@ -1017,6 +1233,37 @@ fn map_engine_err(e: engine::EngineError) -> McpError {
 
 fn no_session_error() -> McpError {
     McpError::internal_error("no active browser session", None)
+}
+
+/// `UnknownSkill`/`NoVisionRole` are caller/config-input problems (a bad
+/// skill name, a missing `[roles.vision]`); everything else (an `Llm`
+/// request failure mid-vision-call, an `Io` error resolving a skill file)
+/// is this server's own environment misbehaving.
+fn map_agent_err(e: agent::AgentError) -> McpError {
+    match e {
+        agent::AgentError::NoVisionRole | agent::AgentError::UnknownSkill(_) => {
+            McpError::invalid_params(e.to_string(), None)
+        }
+        other => McpError::internal_error(other.to_string(), None),
+    }
+}
+
+/// One line per step-relevant event for `browser_run_task`'s returned
+/// transcript -- mirrors `aib agent`'s own human-readable rendering
+/// (`src/agent_cmd.rs`'s `render_event`), building strings instead of
+/// printing them. `Step`/`Done` carry nothing a transcript line needs that
+/// isn't already in the final PASS/FAIL summary appended after this loop.
+fn transcript_line(event: &agent::AgentEvent) -> Option<String> {
+    use agent::AgentEvent::*;
+    match event {
+        Step { .. } | Done { .. } => None,
+        ToolCall { name, args_summary } => Some(format!("-> {name} {args_summary}")),
+        ToolResult { name, ok, summary } => Some(format!(
+            "   {} {name}: {summary}",
+            if *ok { "ok" } else { "error" }
+        )),
+        Vision { chars } => Some(format!("   (vision interpretation: {chars} chars)")),
+    }
 }
 
 fn base64_encode(bytes: &[u8]) -> String {

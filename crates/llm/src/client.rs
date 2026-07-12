@@ -10,6 +10,7 @@ use crate::client_responses::ResponsesClient;
 use crate::error::Result;
 use crate::types::{ChatRequest, ChatResponse};
 
+#[derive(Clone)]
 pub enum Client {
     Compat(CompatClient),
     Responses(ResponsesClient),
@@ -27,6 +28,7 @@ impl Client {
 /// A role resolved to a concrete client + the model name to send
 /// (agent-harness spec: driver/vision roles). `vision` mirrors the role's
 /// config flag and drives the agent loop's screenshot-routing decision.
+#[derive(Clone)]
 pub struct RoleClient {
     pub client: Client,
     pub model: String,

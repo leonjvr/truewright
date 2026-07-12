@@ -29,6 +29,7 @@ const RESPONSES_PATH: &str = "/responses";
 /// honesty-vs-compatibility discussion).
 const ORIGINATOR: &str = "aib_agent_harness";
 
+#[derive(Clone)]
 pub struct ResponsesClient {
     http: reqwest::Client,
     base_url: String,
