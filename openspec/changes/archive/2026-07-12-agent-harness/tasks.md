@@ -37,7 +37,7 @@
 - [x] 7.6 `cargo clippy --workspace --all-targets` clean
 
 ## 8. Wrap-up
-- [ ] 8.1 Update README (`aib agent`, tool subset, vision routing, skills)
-- [ ] 8.2 Update PROPOSAL.md's roadmap
-- [ ] 8.3 `openspec archive agent-harness -y`
-- [ ] 8.4 Three commits: Propose, Implement, Sync-specs-and-archive
+- [x] 8.1 Update README (`aib agent`, tool subset, vision routing, skills)
+- [x] 8.2 Update PROPOSAL.md's roadmap
+- [x] 8.3 `openspec archive agent-harness -y`
+- [x] 8.4 Three commits: Propose, Implement, Sync-specs-and-archive
