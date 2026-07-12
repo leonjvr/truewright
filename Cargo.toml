@@ -37,6 +37,9 @@ name = "truewright"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
+description = "An LLM-first browser-testing engine: drives real Chrome/Edge over CDP with human-realistic input, deterministic replay, and a native MCP agent harness."
+repository = "https://github.com/leonjvr/truewright"
+readme = "README.md"
 
 [[bin]]
 name = "truewright"
@@ -64,3 +67,8 @@ rand.workspace = true
 reqwest.workspace = true
 rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }
 anyhow = "1"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

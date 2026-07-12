@@ -1,1 +1,7 @@
 /target
+
+# Local Claude Code state -- machine-specific permissions/session lock,
+# never shared. Already covered by Claude Code's own global excludes;
+# listed here too as defense-in-depth so it's not repo-config-dependent.
+/.claude/settings.local.json
+/.claude/scheduled_tasks.lock
