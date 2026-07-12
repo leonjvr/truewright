@@ -1,0 +1,27 @@
+# Design: mcp-task-delegation
+
+## Decision 1: Bundle harness + skill dirs into one `AgentConfig`, not two independent `Option`s
+
+`browser_run_task` needs both a `Harness` (to actually run) and skill search directories (to resolve the `skills` param the same way `aib agent --skill` does). These are only ever meaningful together -- a `Harness` with no skill dirs can't resolve any named skill, and skill dirs with no `Harness` have nothing to attach to. Two independent `Option<Arc<Harness>>` / `Vec<PathBuf>` fields on `AibTools` could drift out of sync (one `Some`, the other stale/empty) with no type-level guard against it. A single `pub struct AgentConfig { harness: Arc<Harness>, skill_dirs: Vec<PathBuf> }`, stored as one `Option<AgentConfig>` field, makes "no LLM configured" and "LLM configured" the only two reachable states.
+
+## Decision 2: A `.with_agent(...)` builder method, not a new required constructor parameter
+
+`AibTools::new`/`with_browser_pref`/`with_profile_name` are called from `src/mcp.rs`, and `with_browser_pref`/`with_profile_name` are also the direct target of every existing test in `tests/mcp_http_flow.rs`. Adding a fourth/fifth positional parameter to three existing constructors -- all to thread through a value that's `None` in the overwhelming majority of real usage (no LLM configured at all) -- would touch every existing call site for a rarely-populated field. A consuming `.with_agent(self, agent: Option<AgentConfig>) -> Self` builder keeps every existing constructor and call site untouched; only the two places that actually load config (`src/mcp.rs`'s `router`/`run`/`run_http`) opt in.
+
+## Decision 3: `Harness: Clone`, not a `max_steps` parameter threaded through `run_task`
+
+The MCP tool's own plan (and the original approved design) calls for a lower default `max_steps` (25) than the CLI's config-driven default (40, or whatever `[agent].max_steps` is set to), since a long-running task is more likely to blow past an outer MCP host's own tool-call timeout than a human waiting at a terminal. `browser_run_task`'s `max_steps` request param needs to override the shared `Harness`'s own value for one call, without mutating the `Arc<Harness>` shared across the whole server (and, in streamable-HTTP mode, potentially across concurrent sessions holding the same `Arc`).
+
+Two ways to get a per-call override: (a) add a `max_steps_override: Option<u32>` parameter to `Harness::run_task` itself, touching its signature and therefore every existing call site (`agent_cmd.rs`, and all 8 of change 3's own tests); or (b) make `Harness` cheaply `Clone`-able (every field already was: `RoleClient` wraps a `Client` enum over `reqwest::Client`/`String`/the already-`Clone` `CredentialSource`, and `Option<RoleClient>`/`u32`/`Duration` are all trivially `Clone`) and build a one-off copy with struct-update syntax: `Harness { max_steps: n, ..(*shared).clone() }`. (b) touches four `#[derive(Clone)]` lines and zero existing call sites or tests -- the smaller, more contained change, and consistent with this project's general preference (documented in earlier design.md's, e.g. `CdpError`'s flat-enum decision) for the option that doesn't ripple through already-shipped, already-tested code when the alternative is this cheap.
+
+## Decision 4: `interpret`/`guidance` as optional request fields, not a separate tool
+
+`browser_screenshot_interpret` as its own tool was considered and rejected: it would duplicate the actual screenshot-capture call (session lock, `session.screenshot()`, error mapping) against `browser_screenshot`, for a caller-visible difference that's really just "what do you want back, the image or a description of it." `#[serde(default)]` optional fields keep `browser_screenshot()` (no args) byte-for-byte identical to today's behavior -- the same reasoning applies to `browser_record_stop`'s preview frame.
+
+## Decision 5: A parse failure in an existing config file warns; no `[roles.driver]` at all stays silent
+
+`aib mcp` must keep working with zero LLM configuration, the same guarantee `llm::Config::load` already makes for every other `aib` subcommand (a missing config file is a valid empty config). But a config file that *exists* and fails to *parse* (a real TOML syntax error, say) is a different situation -- the user clearly meant to configure something and it silently didn't take effect. `aib mcp` prints one stderr warning in that case and continues with `agent: None`, rather than either crashing (breaking every browser tool over a typo in an LLM section nobody's using yet this session) or staying silent (the user never finds out `browser_run_task` is unavailable until they try to call it and get a generic "not configured" error with no clue why).
+
+## Testing
+
+Real Chrome + a real local LLM stub server (new `tests/support/llm_stub.rs` at the workspace-binary level -- `crates/agent/tests/support/llm_stub.rs` is private to that crate's own `tests/`, the same reason `crates/agent` couldn't reuse `crates/llm`'s or `crates/engine`'s stub servers either) driven through a real streamable-HTTP MCP client, extending the existing `tests/mcp_http_flow.rs` pattern: a full `browser_run_task` pass against a real fixture page; `browser_run_task` with no `[roles.driver]` configured returning a clear invalid-params error; `browser_screenshot(interpret: true)` routed to a real second vision stub returning text, not an image block.
