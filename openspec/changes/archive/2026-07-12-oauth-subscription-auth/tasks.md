@@ -36,5 +36,5 @@
 ## 7. Wrap-up
 - [x] 7.1 Update README (OAuth login, config `oauth_flow`, `aib auth` commands, the unofficial/unverified-backend caveat)
 - [x] 7.2 Update PROPOSAL.md's roadmap
-- [ ] 7.3 `openspec archive oauth-subscription-auth -y`
-- [ ] 7.4 Three commits: Propose, Implement, Sync-specs-and-archive
+- [x] 7.3 `openspec archive oauth-subscription-auth -y`
+- [x] 7.4 Three commits: Propose, Implement, Sync-specs-and-archive
