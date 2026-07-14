@@ -20,10 +20,22 @@ pub async fn run(
     browser_pref: cdp::launch::BrowserPreference,
     agent: Option<AgentConfig>,
 ) -> std::process::ExitCode {
-    let service = match TruewrightTools::with_browser_pref(headless, browser_pref)
-        .with_agent(agent)
-        .serve(stdio())
-        .await
+    // A fixed profile name here would collide with any other stdio
+    // truewright mcp process already running against the same Chrome
+    // user-data directory -- an MCP host can and does spawn more than one
+    // of these concurrently (e.g. one per open conversation window), so
+    // this needs the same per-instance uniqueness router() already gives
+    // each HTTP session, not the single-process assumption a fixed name
+    // implies.
+    let suffix: u64 = rand::random();
+    let service = match TruewrightTools::with_profile_name(
+        headless,
+        browser_pref,
+        format!("truewright-mcp-{suffix:016x}"),
+    )
+    .with_agent(agent)
+    .serve(stdio())
+    .await
     {
         Ok(service) => service,
         Err(e) => {

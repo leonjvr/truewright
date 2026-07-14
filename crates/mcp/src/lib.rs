@@ -269,12 +269,16 @@ pub struct TruewrightTools {
     console_capture: Arc<Mutex<Option<engine::ConsoleCapture>>>,
     headless: bool,
     browser_pref: cdp::launch::BrowserPreference,
-    /// The `Session::launch` profile-directory name. Fixed at `"truewright-mcp"`
-    /// for stdio (one process, one profile, never a collision risk);
-    /// streamable-HTTP mode gives each session its own randomly-suffixed
-    /// name instead, since multiple concurrent sessions could otherwise
-    /// collide on the same Chrome user-data directory (mcp-streamable-http
-    /// spec: "Independent per-session browser").
+    /// The `Session::launch` profile-directory name. Both real entry points
+    /// (`src/mcp.rs`'s stdio `run` and streamable-HTTP `router`) give this a
+    /// randomly-suffixed value unique per process/session -- a stdio server
+    /// is not actually "one process, one profile" the way it looks from a
+    /// single terminal: an MCP host can and does spawn more than one
+    /// concurrent stdio subprocess (e.g. one per open conversation window),
+    /// and a fixed shared name here made every one of them race for the
+    /// same Chrome user-data directory (mcp-streamable-http spec:
+    /// "Independent per-session browser" already covered the HTTP case;
+    /// this field's stdio caller now gets the same treatment).
     profile_name: String,
     /// `None` whenever no `[roles.driver]` is configured -- the ordinary,
     /// zero-LLM-setup case every browser-only tool must keep working under
@@ -293,13 +297,18 @@ impl TruewrightTools {
         Self::with_browser_pref(headless, cdp::launch::BrowserPreference::Auto)
     }
 
+    /// A fixed, human-inspectable profile name -- convenient for a single
+    /// isolated debug/test run, but NOT what `truewright mcp`'s real stdio
+    /// entry point uses (see `src/mcp.rs::run`), since a fixed name here
+    /// would collide with any other concurrently-running instance sharing
+    /// it.
     pub fn with_browser_pref(headless: bool, browser_pref: cdp::launch::BrowserPreference) -> Self {
         Self::with_profile_name(headless, browser_pref, "truewright-mcp".to_string())
     }
 
     /// As `with_browser_pref`, but with an explicit profile-directory name
-    /// instead of the fixed `"truewright-mcp"` default -- used by streamable-HTTP
-    /// mode to give each session its own isolated profile.
+    /// instead of the fixed `"truewright-mcp"` default -- used by both real
+    /// entry points to give each process/session its own isolated profile.
     pub fn with_profile_name(
         headless: bool,
         browser_pref: cdp::launch::BrowserPreference,
