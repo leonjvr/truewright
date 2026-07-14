@@ -8,7 +8,8 @@ use truewright::mcp;
 #[derive(Parser)]
 #[command(
     name = "truewright",
-    about = "truewright: an LLM-first browser-testing engine"
+    about = "truewright: an LLM-first browser-testing engine",
+    version
 )]
 struct Cli {
     #[command(subcommand)]
