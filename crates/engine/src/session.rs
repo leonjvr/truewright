@@ -89,6 +89,15 @@ pub struct HumanLike {
     pub seed: Option<u64>,
 }
 
+/// Which mouse button a click dispatches. `Left` is the ordinary click;
+/// `Right` fires a native `contextmenu` (browser-actions spec: "Right-click
+/// by ref").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Right,
+}
+
 #[derive(Debug, Deserialize)]
 struct ResolveResult {
     ok: bool,
@@ -580,7 +589,33 @@ impl Session {
     ) -> Result<Option<u64>> {
         self.log_action(format!("click {ref}")).await;
         let suppress = self.begin_training_suppression().await;
-        let result = self.click_dispatch(r#ref, human, true_input).await;
+        let result = self
+            .click_dispatch(r#ref, human, true_input, MouseButton::Left)
+            .await;
+        self.end_training_suppression(suppress).await;
+        result
+    }
+
+    /// Right-clicks the element by ref, firing a native `contextmenu` event
+    /// (browser-actions spec: "Right-click by ref").
+    pub async fn right_click(&self, r#ref: &str) -> Result<()> {
+        self.right_click_with(r#ref, None, false).await?;
+        Ok(())
+    }
+
+    /// Human-like / true-input variant of `right_click`, mirroring
+    /// `click_with` but pressing the right mouse button.
+    pub async fn right_click_with(
+        &self,
+        r#ref: &str,
+        human: Option<HumanLike>,
+        true_input: bool,
+    ) -> Result<Option<u64>> {
+        self.log_action(format!("right_click {ref}")).await;
+        let suppress = self.begin_training_suppression().await;
+        let result = self
+            .click_dispatch(r#ref, human, true_input, MouseButton::Right)
+            .await;
         self.end_training_suppression(suppress).await;
         result
     }
@@ -634,13 +669,14 @@ impl Session {
         r#ref: &str,
         human: Option<HumanLike>,
         true_input: bool,
+        button: MouseButton,
     ) -> Result<Option<u64>> {
         let coords = self
             .resolve_actionable(r#ref, DEFAULT_ACTION_TIMEOUT)
             .await?;
 
         if true_input {
-            return self.click_true_input(coords, human).await;
+            return self.click_true_input(coords, human, button).await;
         }
 
         let seed = if let Some(HumanLike { persona, seed }) = human {
@@ -656,10 +692,11 @@ impl Session {
             None
         };
 
-        self.active_page()
-            .await
-            .click_at(coords.x, coords.y)
-            .await?;
+        let page = self.active_page().await;
+        match button {
+            MouseButton::Left => page.click_at(coords.x, coords.y).await?,
+            MouseButton::Right => page.right_click_at(coords.x, coords.y).await?,
+        }
         *self.mouse_pos.lock().await = (coords.x, coords.y);
         Ok(seed)
     }
@@ -682,6 +719,7 @@ impl Session {
                         seed: Some(seed),
                     }),
                     true_input,
+                    MouseButton::Left,
                 )
                 .await?;
 
@@ -695,7 +733,8 @@ impl Session {
                 Some(seed)
             }
             None => {
-                self.click_dispatch(r#ref, None, true_input).await?;
+                self.click_dispatch(r#ref, None, true_input, MouseButton::Left)
+                    .await?;
                 if true_input {
                     // SendInput has no bulk-insert primitive -- every
                     // character is its own real keystroke either way, so
@@ -1001,6 +1040,7 @@ impl Session {
         &self,
         coords: Coordinates,
         human: Option<HumanLike>,
+        button: MouseButton,
     ) -> Result<Option<u64>> {
         let pid = self.true_input_pid()?;
         let geom = self.window_geometry().await?;
@@ -1025,14 +1065,22 @@ impl Session {
                         }
                     })
                     .collect();
-                self.run_true_input(move || cdp::os_input::walk_and_click(pid, hint, &screen_path))
-                    .await?;
+                self.run_true_input(move || match button {
+                    MouseButton::Left => cdp::os_input::walk_and_click(pid, hint, &screen_path),
+                    MouseButton::Right => {
+                        cdp::os_input::walk_and_right_click(pid, hint, &screen_path)
+                    }
+                })
+                .await?;
                 Some(seed)
             }
             None => {
                 let (x, y) = cdp::os_input::viewport_to_screen(geom, coords.x, coords.y);
-                self.run_true_input(move || cdp::os_input::click_at(pid, hint, x, y))
-                    .await?;
+                self.run_true_input(move || match button {
+                    MouseButton::Left => cdp::os_input::click_at(pid, hint, x, y),
+                    MouseButton::Right => cdp::os_input::right_click_at(pid, hint, x, y),
+                })
+                .await?;
                 None
             }
         };
@@ -1046,6 +1094,7 @@ impl Session {
         &self,
         _coords: Coordinates,
         _human: Option<HumanLike>,
+        _button: MouseButton,
     ) -> Result<Option<u64>> {
         Err(EngineError::TrueInputUnsupported(
             "true_input is only supported on Windows".to_string(),

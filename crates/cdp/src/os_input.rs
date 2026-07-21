@@ -16,7 +16,8 @@ use windows::Win32::Foundation::{GetLastError, HWND, LPARAM, RECT, TRUE};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
     KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
-    MOUSEEVENTF_MOVE, MOUSEINPUT, VIRTUAL_KEY,
+    MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEINPUT, MOUSE_EVENT_FLAGS,
+    VIRTUAL_KEY,
 };
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -306,10 +307,44 @@ fn activate(pid: u32, hint: WindowHint) -> Result<HWND> {
 /// (windows-rs's `HWND` is not `Send`).
 #[allow(clippy::result_large_err)]
 pub fn click_at(pid: u32, hint: WindowHint, screen_x: f64, screen_y: f64) -> Result<()> {
+    button_click_at(
+        pid,
+        hint,
+        screen_x,
+        screen_y,
+        MOUSEEVENTF_LEFTDOWN,
+        MOUSEEVENTF_LEFTUP,
+    )
+}
+
+/// Like `click_at`, but presses and releases the right button -- the OS
+/// fires a native `WM_CONTEXTMENU` / `contextmenu` just as a physical
+/// right-click does.
+#[allow(clippy::result_large_err)]
+pub fn right_click_at(pid: u32, hint: WindowHint, screen_x: f64, screen_y: f64) -> Result<()> {
+    button_click_at(
+        pid,
+        hint,
+        screen_x,
+        screen_y,
+        MOUSEEVENTF_RIGHTDOWN,
+        MOUSEEVENTF_RIGHTUP,
+    )
+}
+
+#[allow(clippy::result_large_err)]
+fn button_click_at(
+    pid: u32,
+    hint: WindowHint,
+    screen_x: f64,
+    screen_y: f64,
+    down: MOUSE_EVENT_FLAGS,
+    up: MOUSE_EVENT_FLAGS,
+) -> Result<()> {
     activate(pid, hint)?;
     send_inputs(&[move_input(screen_x, screen_y)])?;
-    send_inputs(&[mouse_input(0, 0, MOUSEEVENTF_LEFTDOWN)])?;
-    send_inputs(&[mouse_input(0, 0, MOUSEEVENTF_LEFTUP)])?;
+    send_inputs(&[mouse_input(0, 0, down)])?;
+    send_inputs(&[mouse_input(0, 0, up)])?;
     Ok(())
 }
 
@@ -318,6 +353,23 @@ pub fn click_at(pid: u32, hint: WindowHint, screen_x: f64, screen_y: f64) -> Res
 /// the final point. `path` must be non-empty.
 #[allow(clippy::result_large_err)]
 pub fn walk_and_click(pid: u32, hint: WindowHint, path: &[ScreenPoint]) -> Result<()> {
+    walk_and_button_click(pid, hint, path, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)
+}
+
+/// Like `walk_and_click`, but right-clicks at the final point.
+#[allow(clippy::result_large_err)]
+pub fn walk_and_right_click(pid: u32, hint: WindowHint, path: &[ScreenPoint]) -> Result<()> {
+    walk_and_button_click(pid, hint, path, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP)
+}
+
+#[allow(clippy::result_large_err)]
+fn walk_and_button_click(
+    pid: u32,
+    hint: WindowHint,
+    path: &[ScreenPoint],
+    down: MOUSE_EVENT_FLAGS,
+    up: MOUSE_EVENT_FLAGS,
+) -> Result<()> {
     activate(pid, hint)?;
     let mut last_ms = 0.0;
     for point in path {
@@ -328,8 +380,8 @@ pub fn walk_and_click(pid: u32, hint: WindowHint, path: &[ScreenPoint]) -> Resul
         send_inputs(&[move_input(point.x, point.y)])?;
         last_ms = point.at_ms;
     }
-    send_inputs(&[mouse_input(0, 0, MOUSEEVENTF_LEFTDOWN)])?;
-    send_inputs(&[mouse_input(0, 0, MOUSEEVENTF_LEFTUP)])?;
+    send_inputs(&[mouse_input(0, 0, down)])?;
+    send_inputs(&[mouse_input(0, 0, up)])?;
     Ok(())
 }
 

@@ -23,6 +23,7 @@ const DEFAULT_WAIT_FOR_MS: u64 = 5000;
 pub enum Step {
     Navigate(String),
     Click(String),
+    RightClick(String),
     Type {
         r#ref: String,
         text: String,
@@ -84,6 +85,9 @@ impl<'de> Deserialize<'de> for Step {
             "click" => Ok(Step::Click(
                 serde_yaml::from_value(value).map_err(DeError::custom)?,
             )),
+            "right_click" => Ok(Step::RightClick(
+                serde_yaml::from_value(value).map_err(DeError::custom)?,
+            )),
             "type" => {
                 let p: TypePayload = serde_yaml::from_value(value).map_err(DeError::custom)?;
                 Ok(Step::Type {
@@ -110,7 +114,7 @@ impl<'de> Deserialize<'de> for Step {
                 })
             }
             other => Err(DeError::custom(format!(
-                "unknown step kind {other:?} (expected one of: navigate, click, type, press, wait_for, assert)"
+                "unknown step kind {other:?} (expected one of: navigate, click, right_click, type, press, wait_for, assert)"
             ))),
         }
     }
@@ -125,6 +129,7 @@ impl Serialize for Step {
         match self {
             Step::Navigate(url) => map.serialize_entry("navigate", url)?,
             Step::Click(r#ref) => map.serialize_entry("click", r#ref)?,
+            Step::RightClick(r#ref) => map.serialize_entry("right_click", r#ref)?,
             Step::Type { r#ref, text, submit } => map.serialize_entry(
                 "type",
                 &TypePayload {
@@ -157,6 +162,7 @@ fn step_kind(step: &Step) -> &'static str {
     match step {
         Step::Navigate(_) => "navigate",
         Step::Click(_) => "click",
+        Step::RightClick(_) => "right_click",
         Step::Type { .. } => "type",
         Step::Press(_) => "press",
         Step::WaitFor { .. } => "wait_for",
@@ -183,6 +189,7 @@ async fn run_step(session: &Session, step: &Step) -> Result<()> {
             session.navigate(url).await?;
         }
         Step::Click(r#ref) => session.click(r#ref).await?,
+        Step::RightClick(r#ref) => session.right_click(r#ref).await?,
         Step::Type { r#ref, text, submit } => session.type_text(r#ref, text, *submit).await?,
         Step::Press(key) => session.press(key).await?,
         Step::WaitFor { text, timeout_ms } => {
@@ -267,6 +274,9 @@ fn action_to_step(text: &str) -> Option<Step> {
     if let Some(rest) = text.strip_prefix("navigate ") {
         return Some(Step::Navigate(rest.to_string()));
     }
+    if let Some(rest) = text.strip_prefix("right_click ") {
+        return Some(Step::RightClick(rest.to_string()));
+    }
     if let Some(rest) = text.strip_prefix("click ") {
         return Some(Step::Click(rest.to_string()));
     }
@@ -323,6 +333,10 @@ mod tests {
         assert!(matches!(
             action_to_step("click e6"),
             Some(Step::Click(r)) if r == "e6"
+        ));
+        assert!(matches!(
+            action_to_step("right_click e6"),
+            Some(Step::RightClick(r)) if r == "e6"
         ));
         assert!(matches!(
             action_to_step(r#"type e6 "hello@example.com""#),

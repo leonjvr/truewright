@@ -161,7 +161,7 @@ fn default_true() -> bool {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RunYamlRequest {
     #[schemars(
-        description = "YAML script source: {name?, steps: [{navigate: url}, {click: ref}, {type: {ref, text, submit?}}, {press: key}, {wait_for: {text, timeout_ms?}}, {assert: {text, present?}}]}"
+        description = "YAML script source: {name?, steps: [{navigate: url}, {click: ref}, {right_click: ref}, {type: {ref, text, submit?}}, {press: key}, {wait_for: {text, timeout_ms?}}, {assert: {text, present?}}]}"
     )]
     pub source: String,
 }
@@ -541,6 +541,34 @@ impl TruewrightTools {
     }
 
     #[tool(
+        description = "Right-click (secondary-click) an element by its ref from the last snapshot, firing a native contextmenu event -- use this to open a page's own right-click / context menu. Set human_like to move the mouse along a curved path first, like a real user. Set true_input to dispatch via real Windows OS-level input instead of CDP (moves the actual system cursor)."
+    )]
+    async fn browser_right_click(
+        &self,
+        Parameters(RefRequest {
+            r#ref,
+            human_like,
+            persona,
+            trained_profile,
+            seed,
+            true_input,
+        }): Parameters<RefRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_session().await?;
+        let guard = self.session.lock().await;
+        let session = guard.as_ref().ok_or_else(no_session_error)?;
+        let human = build_human_like(human_like, persona, trained_profile, seed)?;
+        let used_seed = session
+            .right_click_with(&r#ref, human, true_input)
+            .await
+            .map_err(map_engine_err)?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "right-clicked {ref}{}. Call browser_snapshot to see the context menu or any resulting changes.",
+            seed_suffix(used_seed)
+        ))]))
+    }
+
+    #[tool(
         description = "Click an element by ref, then type text into it (optionally submit with Enter). Set human_like to move to it and type character-by-character with human-like pauses. Set true_input to dispatch via real Windows OS-level input instead of CDP (moves the actual system cursor and takes real keyboard focus)."
     )]
     async fn browser_type(
@@ -632,7 +660,7 @@ impl TruewrightTools {
     }
 
     #[tool(
-        description = "Parse and run a YAML script's steps (navigate/click/type/press/wait_for/assert) against the current session, in order. Stops at the first failing step and reports which one."
+        description = "Parse and run a YAML script's steps (navigate/click/right_click/type/press/wait_for/assert) against the current session, in order. Stops at the first failing step and reports which one."
     )]
     async fn browser_run_yaml(
         &self,
@@ -657,7 +685,7 @@ impl TruewrightTools {
     }
 
     #[tool(
-        description = "Export a saved console/action trace's actions (navigate/click/type/press/assert) as a runnable YAML script -- 'record once, get a script'. Console/exception entries are not included."
+        description = "Export a saved console/action trace's actions (navigate/click/right_click/type/press/assert) as a runnable YAML script -- 'record once, get a script'. Console/exception entries are not included."
     )]
     async fn browser_export_yaml(
         &self,
@@ -1092,6 +1120,7 @@ impl ServerHandler for TruewrightTools {
             .with_instructions(
                 "Drives a real Chrome/Edge browser. Tools: browser_navigate(url), \
                  browser_snapshot(), browser_click(ref, human_like?, persona?, trained_profile?, seed?, true_input?), \
+                 browser_right_click(ref, human_like?, persona?, trained_profile?, seed?, true_input?), \
                  browser_type(ref, text, submit?, human_like?, persona?, trained_profile?, seed?, true_input?), \
                  browser_press(key), browser_wait_for(text, timeout_ms?), \
                  browser_screenshot(interpret?, guidance?), \
@@ -1145,7 +1174,7 @@ impl ServerHandler for TruewrightTools {
                  unlike browser_wait_for) and fails as a real tool-call failure you should treat as a \
                  test failure, not a protocol error -- present defaults to true (assert the text is \
                  there); set it to false to assert the text is absent. browser_run_yaml(source) runs a \
-                 YAML script's steps (navigate/click/type/press/wait_for/assert, one per line like \
+                 YAML script's steps (navigate/click/right_click/type/press/wait_for/assert, one per line like \
                  `- click: e6` or `- type: {ref: e6, text: \"...\"}`) against the current session, \
                  stopping at the first failing step; browser_export_yaml(name) turns an already-saved \
                  trace's actions back into a runnable script of that same format -- record a flow once \

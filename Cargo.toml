@@ -34,7 +34,7 @@ tokio-util = "0.7"
 
 [package]
 name = "truewright"
-version = "0.0.2"
+version = "0.0.3"
 edition.workspace = true
 license.workspace = true
 description = "An LLM-first browser-testing engine: drives real Chrome/Edge over CDP with human-realistic input, deterministic replay, and a native MCP agent harness."

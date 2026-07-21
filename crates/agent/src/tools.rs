@@ -45,6 +45,15 @@ pub fn tool_defs() -> Vec<ToolDef> {
             }),
         },
         ToolDef {
+            name: "right_click".to_string(),
+            description: "Right-clicks (secondary-clicks) the element identified by ref, firing a native contextmenu event -- use this to open a page's own right-click / context menu.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "ref": { "type": "string" } },
+                "required": ["ref"]
+            }),
+        },
+        ToolDef {
             name: "type".to_string(),
             description: "Clicks the element identified by ref to focus it, then types text. Set submit true to press Enter afterward.".to_string(),
             parameters: json!({
@@ -202,6 +211,19 @@ pub async fn execute_tool(
                 ));
             };
             match s.click(r#ref).await {
+                Ok(()) => ToolOutcome::Text("ok".to_string()),
+                Err(e) => ToolOutcome::Text(format!(
+                    "error: {e}. Take a fresh snapshot if the ref may be stale."
+                )),
+            }
+        }
+        "right_click" => {
+            let Some(r#ref) = args["ref"].as_str() else {
+                return Ok(ToolOutcome::Text(
+                    "error: missing required argument \"ref\"".to_string(),
+                ));
+            };
+            match s.right_click(r#ref).await {
                 Ok(()) => ToolOutcome::Text("ok".to_string()),
                 Err(e) => ToolOutcome::Text(format!(
                     "error: {e}. Take a fresh snapshot if the ref may be stale."

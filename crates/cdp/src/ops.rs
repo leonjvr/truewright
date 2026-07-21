@@ -334,13 +334,26 @@ impl Page {
     /// Left-clicks at viewport coordinates (press + release), for the
     /// `engine` crate's ref-resolved actions.
     pub async fn click_at(&self, x: f64, y: f64) -> Result<()> {
+        self.mouse_click_at(x, y, "left").await
+    }
+
+    /// Right-clicks at viewport coordinates (press + release with the right
+    /// button), which fires a native `contextmenu` event just as a real
+    /// right-click does, for the `engine` crate's ref-resolved actions.
+    pub async fn right_click_at(&self, x: f64, y: f64) -> Result<()> {
+        self.mouse_click_at(x, y, "right").await
+    }
+
+    /// Dispatches a press+release pair with the given CDP mouse button
+    /// (`"left"` / `"right"` / `"middle"`) at viewport coordinates.
+    async fn mouse_click_at(&self, x: f64, y: f64, button: &str) -> Result<()> {
         for kind in ["mousePressed", "mouseReleased"] {
             self.session
                 .execute::<input::DispatchMouseEvent>(input::DispatchMouseEventParams {
                     kind: kind.to_string(),
                     x,
                     y,
-                    button: Some("left".to_string()),
+                    button: Some(button.to_string()),
                     click_count: Some(1),
                 })
                 .await?;
