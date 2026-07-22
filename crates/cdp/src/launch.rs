@@ -245,9 +245,10 @@ pub fn profile_base_dir() -> Result<PathBuf> {
 }
 
 /// Chromium's sandbox needs privileges a bare container init typically
-/// lacks; `--no-sandbox` is the standard workaround, but only applied when
-/// actually running as root on Linux (never on Windows, never as a normal
-/// Linux user).
+/// lacks; `--no-sandbox` is the standard workaround, applied automatically
+/// on Linux when running as root, inside a container, or under CI (never on
+/// Windows). Callers can also force it explicitly (CLI `--no-sandbox`,
+/// `--chrome-arg=--no-sandbox`, or `TRUEWRIGHT_CHROME_ARGS`).
 #[cfg(target_os = "linux")]
 fn running_as_root() -> bool {
     std::fs::read_to_string("/proc/self/status")
@@ -263,6 +264,50 @@ fn running_as_root() -> bool {
             })
         })
         .unwrap_or(false)
+}
+
+/// Best-effort detection of a container or CI environment, where Chromium's
+/// setuid/namespace sandbox usually can't initialize (the unprivileged
+/// LXC/CI case `--no-sandbox` exists for). `container` is set by
+/// systemd-nspawn/LXC/podman, `CI` by essentially every CI system, and the
+/// two marker files by Docker/Podman respectively. None of these is
+/// authoritative, so this only *adds* `--no-sandbox` (a safe no-op when the
+/// sandbox would have worked); it never removes it.
+#[cfg(target_os = "linux")]
+fn in_container_or_ci() -> bool {
+    std::env::var_os("container").is_some()
+        || std::env::var_os("CI").is_some()
+        || Path::new("/.dockerenv").exists()
+        || Path::new("/run/.containerenv").exists()
+}
+
+/// Whether launch should append `--no-sandbox` on its own (Linux only).
+#[cfg(target_os = "linux")]
+fn sandbox_should_be_disabled() -> bool {
+    running_as_root() || in_container_or_ci()
+}
+
+/// Extra Chrome flags from the `TRUEWRIGHT_CHROME_ARGS` environment
+/// variable, whitespace-separated (e.g.
+/// `"--no-sandbox --window-size=1440,900 --kiosk"`). Read at the launch
+/// layer so it applies to every entry point — `mcp`, `doctor`, `agent`, and
+/// the test suite — without each having to thread it through. Chrome's own
+/// flags never contain spaces in a single token, so whitespace splitting is
+/// sufficient and matches how the same flags are passed on a real command
+/// line.
+fn chrome_args_from_env() -> Vec<String> {
+    std::env::var("TRUEWRIGHT_CHROME_ARGS")
+        .ok()
+        .map(|raw| split_chrome_args(&raw))
+        .unwrap_or_default()
+}
+
+/// Whitespace-splits a raw `TRUEWRIGHT_CHROME_ARGS` value into individual
+/// flags, dropping empty tokens from runs of spaces. Pulled out from
+/// [`chrome_args_from_env`] so the parsing is unit-testable without mutating
+/// process-global environment state.
+fn split_chrome_args(raw: &str) -> Vec<String> {
+    raw.split_whitespace().map(str::to_string).collect()
 }
 
 pub struct LaunchedBrowser {
@@ -324,10 +369,6 @@ pub async fn launch_with_flags(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .stdin(std::process::Stdio::null());
-    #[cfg(target_os = "linux")]
-    if running_as_root() {
-        cmd.arg("--no-sandbox");
-    }
     // Put the browser in its own session/process group (browser-attach
     // spec: "Clean teardown" — orphaned renderer/GPU/utility children).
     // Without a real init/reaper (e.g. inside a bare container), a killed
@@ -356,7 +397,23 @@ pub async fn launch_with_flags(
             cmd.arg("--headless=new");
         }
     }
-    for arg in extra_args {
+
+    // Caller-supplied flags (config `[browser].extra_args` + repeated
+    // `--chrome-arg`) first, then `TRUEWRIGHT_CHROME_ARGS` from the
+    // environment. All are appended after the base/headless flags so a user
+    // override wins under Chrome's last-flag-wins rule.
+    let mut requested: Vec<String> = extra_args.iter().map(|s| s.to_string()).collect();
+    requested.extend(chrome_args_from_env());
+
+    // Auto `--no-sandbox` in a root/container/CI context, unless the caller
+    // already asked for it (Chrome tolerates the duplicate, but this keeps
+    // the command line clean and the intent unambiguous).
+    #[cfg(target_os = "linux")]
+    if sandbox_should_be_disabled() && !requested.iter().any(|a| a == "--no-sandbox") {
+        cmd.arg("--no-sandbox");
+    }
+
+    for arg in &requested {
         cmd.arg(arg);
     }
 
@@ -505,6 +562,26 @@ mod tests {
             result.is_err(),
             "a nonexistent TRUEWRIGHT_CHROME_PATH must error, not silently fall back"
         );
+    }
+
+    #[test]
+    fn split_chrome_args_tokenizes_on_whitespace() {
+        assert_eq!(
+            split_chrome_args("--no-sandbox --window-size=1440,900 --kiosk"),
+            vec![
+                "--no-sandbox".to_string(),
+                "--window-size=1440,900".to_string(),
+                "--kiosk".to_string(),
+            ]
+        );
+        // Runs of spaces / leading-trailing whitespace collapse away, and an
+        // empty value yields no flags at all (not one empty-string flag).
+        assert_eq!(
+            split_chrome_args("  --a    --b  "),
+            vec!["--a".to_string(), "--b".to_string()]
+        );
+        assert!(split_chrome_args("").is_empty());
+        assert!(split_chrome_args("   ").is_empty());
     }
 
     #[test]

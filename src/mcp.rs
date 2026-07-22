@@ -18,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 pub async fn run(
     headless: bool,
     browser_pref: cdp::launch::BrowserPreference,
+    extra_chrome_args: Vec<String>,
     agent: Option<AgentConfig>,
 ) -> std::process::ExitCode {
     // A fixed profile name here would collide with any other stdio
@@ -33,6 +34,7 @@ pub async fn run(
         browser_pref,
         format!("truewright-mcp-{suffix:016x}"),
     )
+    .with_chrome_args(extra_chrome_args)
     .with_agent(agent)
     .serve(stdio())
     .await
@@ -61,6 +63,7 @@ pub async fn run(
 pub fn router(
     headless: bool,
     browser_pref: cdp::launch::BrowserPreference,
+    extra_chrome_args: Vec<String>,
     token: String,
     cancellation_token: CancellationToken,
     agent: Option<AgentConfig>,
@@ -73,6 +76,7 @@ pub fn router(
             browser_pref,
             format!("truewright-mcp-http-{suffix:016x}"),
         )
+        .with_chrome_args(extra_chrome_args.clone())
         .with_agent(agent.clone()))
     };
     let service: StreamableHttpService<TruewrightTools, LocalSessionManager> =
@@ -113,6 +117,7 @@ fn generate_token() -> String {
 pub async fn run_http(
     headless: bool,
     browser_pref: cdp::launch::BrowserPreference,
+    extra_chrome_args: Vec<String>,
     port: u16,
     token: Option<String>,
     agent: Option<AgentConfig>,
@@ -137,6 +142,7 @@ pub async fn run_http(
     let app = router(
         headless,
         browser_pref,
+        extra_chrome_args,
         token,
         cancellation_token.clone(),
         agent,

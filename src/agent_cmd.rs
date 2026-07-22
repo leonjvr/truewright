@@ -15,6 +15,7 @@ pub async fn run(
     max_steps_override: Option<u32>,
     headed: bool,
     browser: cdp::launch::BrowserPreference,
+    extra_chrome_args: Vec<String>,
     profile: &str,
     config_path: Option<PathBuf>,
     json: bool,
@@ -67,7 +68,14 @@ pub async fn run(
         }
     };
 
-    let session = match engine::Session::launch_with(profile, !headed, browser).await {
+    let session = match engine::Session::launch_with_args(
+        profile,
+        !headed,
+        browser,
+        &extra_chrome_args,
+    )
+    .await
+    {
         Ok(s) => s,
         Err(e) => {
             eprintln!("failed to launch browser: {e}");

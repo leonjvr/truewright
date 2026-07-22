@@ -95,6 +95,18 @@ pub struct SkillsConfig {
     pub dirs: Vec<String>,
 }
 
+/// `[browser]` settings applied to every launched Chrome/Edge session
+/// (`mcp`, `doctor`, `agent`). `extra_args` are raw command-line flags
+/// appended verbatim after the built-in ones — e.g.
+/// `extra_args = ["--no-sandbox", "--kiosk", "--window-size=1440,900"]`.
+/// Merged with the CLI `--chrome-arg` flags and the `TRUEWRIGHT_CHROME_ARGS`
+/// environment variable; all three are cumulative.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct BrowserConfig {
+    pub extra_args: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 struct RawConfig {
@@ -102,6 +114,7 @@ struct RawConfig {
     roles: BTreeMap<String, RoleConfig>,
     agent: AgentSettings,
     skills: SkillsConfig,
+    browser: BrowserConfig,
 }
 
 pub struct Config {
@@ -109,6 +122,7 @@ pub struct Config {
     roles: BTreeMap<String, RoleConfig>,
     pub agent: AgentSettings,
     pub skills: SkillsConfig,
+    pub browser: BrowserConfig,
     token_store: Arc<TokenStore>,
 }
 
@@ -123,6 +137,7 @@ impl Config {
             roles: BTreeMap::new(),
             agent: AgentSettings::default(),
             skills: SkillsConfig::default(),
+            browser: BrowserConfig::default(),
             token_store: Arc::new(TokenStore::new(truewright_data_dir.join("auth"))),
         }
     }
@@ -163,6 +178,7 @@ impl Config {
             roles: raw.roles,
             agent: raw.agent,
             skills: raw.skills,
+            browser: raw.browser,
             token_store: Arc::new(TokenStore::new(truewright_data_dir.join("auth"))),
         })
     }
@@ -331,6 +347,42 @@ mod tests {
         assert_eq!(role.model, "deepseek-chat");
         assert!(!role.vision);
         assert!(matches!(role.client, Client::Compat(_)));
+    }
+
+    #[test]
+    fn parses_browser_extra_args_and_defaults_to_empty() {
+        let path = write_temp_toml(
+            "browser-extra-args",
+            r#"
+                [browser]
+                extra_args = ["--no-sandbox", "--kiosk", "--window-size=1440,900"]
+            "#,
+        );
+        let config = Config::load(&PathBuf::from("unused"), Some(&path)).expect("config parses");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(
+            config.browser.extra_args,
+            vec![
+                "--no-sandbox".to_string(),
+                "--kiosk".to_string(),
+                "--window-size=1440,900".to_string(),
+            ]
+        );
+
+        // A config with no [browser] table at all yields an empty list, not
+        // an error -- browser tools must work with zero extra config.
+        let bare = write_temp_toml(
+            "browser-absent",
+            r#"
+                [providers.deepseek]
+                kind = "openai-compat"
+                base_url = "https://api.deepseek.com/v1"
+                api_key = "sk-test"
+            "#,
+        );
+        let config = Config::load(&PathBuf::from("unused"), Some(&bare)).expect("config parses");
+        std::fs::remove_file(&bare).ok();
+        assert!(config.browser.extra_args.is_empty());
     }
 
     #[test]

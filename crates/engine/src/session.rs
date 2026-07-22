@@ -155,6 +155,21 @@ impl Session {
         Self::launch_with_flags(profile_name, headless, pref, &[]).await
     }
 
+    /// Same as `launch_with`, threading owned extra Chrome flags (the
+    /// config `[browser].extra_args` + CLI `--chrome-arg` values the CLI
+    /// entry points collect). A thin borrow-adapter over `launch_with_flags`
+    /// so callers holding a `Vec<String>` don't each repeat the
+    /// `&str`-slice conversion.
+    pub async fn launch_with_args(
+        profile_name: &str,
+        headless: bool,
+        pref: cdp::launch::BrowserPreference,
+        extra_chrome_args: &[String],
+    ) -> Result<Self> {
+        let refs: Vec<&str> = extra_chrome_args.iter().map(String::as_str).collect();
+        Self::launch_with_flags(profile_name, headless, pref, &refs).await
+    }
+
     /// Same as `launch_with`, with additional raw Chrome command-line flags.
     /// Exists for tests that need a specific Chrome behavior (e.g.
     /// `--site-per-process`, cross-origin-oopif spec) without adding a flag

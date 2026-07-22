@@ -210,7 +210,33 @@ Exits non-zero if any step fails on any browser. See `openspec/specs/doctor-cli/
 
 ### Managed `chrome-headless-shell`
 
-Headless runs auto-download and cache the stripped, headless-only `chrome-headless-shell` binary (from Chrome for Testing) on first use — a deliberate, documented exception to the "no downloads" principle, made because the browser binary, not the driver, dominates memory cost (see `.research/REVIEW.md`). It's cached under `<data-dir>/truewright/browsers/<version>/` and reused offline afterwards; if resolution or download fails, `truewright` falls back to the installed browser automatically. Headed runs, and `--browser installed`, always use the installed browser and never touch the network.
+Headless runs auto-download and cache the stripped, headless-only `chrome-headless-shell` binary (from Chrome for Testing) on first use — a deliberate, documented exception to the "no downloads" principle, made because the browser binary, not the driver, dominates memory cost (see `.research/REVIEW.md`). It's cached under `<data-dir>/truewright/browsers/<version>/` and reused offline afterwards; if resolution or download fails, `truewright` falls back to the installed browser automatically. Headed runs, and `--browser installed`, always use the installed browser and never touch the network. On a cold cache the first `truewright doctor` prints a visible line while the shell downloads (~100MB), rather than appearing to hang with the progress hidden below the default log level.
+
+## Extra Chrome launch flags
+
+`mcp`, `doctor`, and `agent` all append extra raw Chrome/Edge command-line flags at launch, from three cumulative sources (all merge; on a conflicting flag Chrome's own last-wins rule applies):
+
+- **`--chrome-arg <FLAG>`** — repeatable CLI flag, e.g. `--chrome-arg=--kiosk --chrome-arg=--window-size=1440,900`.
+- **`[browser].extra_args`** in the config file (same file as the LLM config below):
+  ```toml
+  [browser]
+  extra_args = ["--no-sandbox", "--kiosk", "--window-size=1440,900", "--window-position=0,0"]
+  ```
+- **`TRUEWRIGHT_CHROME_ARGS`** environment variable — whitespace-separated, e.g. `TRUEWRIGHT_CHROME_ARGS="--no-sandbox --kiosk --window-size=1440,900"`. Read at the launch layer, so it also reaches the test suite and any other entry point without threading.
+
+```
+truewright mcp --chrome-arg=--kiosk --chrome-arg=--window-size=1440,900   # streamed live-view look
+truewright agent "…" --chrome-arg=--window-position=0,0
+TRUEWRIGHT_CHROME_ARGS="--no-sandbox" truewright doctor                     # unblock an unprivileged LXC/CI
+```
+
+### `--no-sandbox` in containers and CI
+
+Chromium's sandbox needs privileges a bare container init usually lacks. On Linux, `truewright` auto-appends `--no-sandbox` when it detects it's running as root, inside a container, or under CI (via the `container`/`CI` environment variables and the `/.dockerenv` / `/run/.containerenv` markers). When detection misses — e.g. an unprivileged LXC that sets none of those — pass the **`--no-sandbox`** shortcut flag (a convenience for `--chrome-arg=--no-sandbox`), available on `mcp`, `doctor`, and `agent`. It's de-duplicated, so combining it with an explicit `--chrome-arg=--no-sandbox` or the config/env forms is harmless.
+
+## Updating (`truewright update`)
+
+`truewright update` is a stable alias that invokes the `truewright-update` companion binary installed alongside `truewright` by the shell/PowerShell installer (`install-updater = true`), forwarding any extra arguments to it. It exists so an auto-update timer can call one consistent command; the companion binary does the actual GitHub-release check and self-replace. Source/other installs (which have no companion) get a clear message pointing back to their own update channel.
 
 ## Recording (`browser_record_start` / `browser_record_stop`)
 

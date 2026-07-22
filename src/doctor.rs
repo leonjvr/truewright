@@ -82,7 +82,12 @@ struct DoctorReport {
     browsers: Vec<BrowserReport>,
 }
 
-pub async fn run(json: bool, headless: bool, installed_only: bool) -> std::process::ExitCode {
+pub async fn run(
+    json: bool,
+    headless: bool,
+    installed_only: bool,
+    extra_chrome_args: Vec<String>,
+) -> std::process::ExitCode {
     let mut discovered = match launch::discover_browsers() {
         Ok(list) => list,
         Err(e) => {
@@ -94,17 +99,51 @@ pub async fn run(json: bool, headless: bool, installed_only: bool) -> std::proce
     // The managed headless-shell is checked as an additional entry (headless
     // runs only — the shell has no headed mode), so its tree_rss_mb can be
     // compared directly against the installed browsers'.
+    //
+    // On a cold cache this resolution *downloads* the shell (~100MB), and
+    // that download logs only at `info` level — below doctor's default
+    // `warn` filter — so a first run otherwise looked like it hung or
+    // skipped the shell entirely (this is task item #4). A visible line up
+    // front, and a visible reason on fallback/failure, makes the first-run
+    // behavior legible without needing `RUST_LOG=info`.
     if headless && !installed_only {
+        let cold_cache = cdp::download::cached_shell().is_none();
+        if cold_cache && !json {
+            eprintln!(
+                "truewright doctor: resolving managed chrome-headless-shell \
+                 (first run downloads ~100MB, then cached)…"
+            );
+        }
         match launch::resolve_headless_browser(launch::BrowserPreference::Auto).await {
-            Ok(shell) if shell.is_headless_shell => discovered.insert(0, shell),
-            Ok(_) => {} // fell back to installed — already in the list
-            Err(e) => tracing::warn!(error = %e, "doctor: headless-shell unavailable"),
+            Ok(shell) if shell.is_headless_shell => {
+                if cold_cache && !json {
+                    eprintln!("truewright doctor: chrome-headless-shell ready.");
+                }
+                discovered.insert(0, shell);
+            }
+            // Resolution succeeded but fell back to an installed browser
+            // (already in the list) — the shell was unavailable for a
+            // reason worth surfacing, not silently dropping.
+            Ok(_) => {
+                if !json {
+                    eprintln!(
+                        "truewright doctor: managed chrome-headless-shell unavailable; \
+                         reporting installed browser(s) only."
+                    );
+                }
+            }
+            Err(e) => {
+                if !json {
+                    eprintln!("truewright doctor: headless-shell resolution failed: {e}");
+                }
+                tracing::warn!(error = %e, "doctor: headless-shell unavailable");
+            }
         }
     }
 
     let mut browsers = Vec::with_capacity(discovered.len());
     for browser in &discovered {
-        browsers.push(check_browser(browser, headless).await);
+        browsers.push(check_browser(browser, headless, &extra_chrome_args).await);
     }
 
     let ok = browsers.iter().all(|b| b.passed);
@@ -138,7 +177,11 @@ fn report_discovery_failure(json: bool, error: &cdp::CdpError) {
     }
 }
 
-async fn check_browser(discovered: &DiscoveredBrowser, headless: bool) -> BrowserReport {
+async fn check_browser(
+    discovered: &DiscoveredBrowser,
+    headless: bool,
+    extra_chrome_args: &[String],
+) -> BrowserReport {
     let kind_label = discovered.kind.label();
     let profile_name = if discovered.is_headless_shell {
         "doctor-shell".to_string()
@@ -147,7 +190,14 @@ async fn check_browser(discovered: &DiscoveredBrowser, headless: bool) -> Browse
     };
     let mut steps = Vec::new();
 
-    let (launch_result, dur) = time(launch::launch(discovered, &profile_name, headless)).await;
+    let arg_refs: Vec<&str> = extra_chrome_args.iter().map(String::as_str).collect();
+    let (launch_result, dur) = time(launch::launch_with_flags(
+        discovered,
+        &profile_name,
+        headless,
+        &arg_refs,
+    ))
+    .await;
     let launched = match launch_result {
         Ok(lb) => {
             steps.push(StepResult::passed("launch", dur));

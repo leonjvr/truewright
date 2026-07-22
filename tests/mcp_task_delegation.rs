@@ -64,6 +64,7 @@ async fn spawn_server(agent: Option<AgentConfig>) -> (String, CancellationToken)
     let app = truewright::mcp::router(
         true,
         cdp::launch::BrowserPreference::Auto,
+        Vec::new(),
         TOKEN.to_string(),
         cancellation_token.clone(),
         agent,

@@ -53,6 +53,22 @@ enum Command {
         /// Browser selection for headless runs.
         #[arg(long, value_enum, default_value_t = BrowserArg::Auto)]
         browser: BrowserArg,
+        /// Extra raw Chrome/Edge command-line flag to pass at launch
+        /// (repeatable), e.g. `--chrome-arg=--no-sandbox
+        /// --chrome-arg=--window-size=1440,900`. Merged with
+        /// `[browser].extra_args` from config and the TRUEWRIGHT_CHROME_ARGS env
+        /// var.
+        #[arg(long = "chrome-arg", value_name = "FLAG")]
+        chrome_args: Vec<String>,
+        /// Shortcut for `--chrome-arg=--no-sandbox` (auto-applied anyway in
+        /// a detected container/CI/root context; use this to force it when
+        /// detection misses, e.g. an unprivileged LXC).
+        #[arg(long)]
+        no_sandbox: bool,
+        /// Explicit config file path, overriding TRUEWRIGHT_CONFIG / ./truewright.toml /
+        /// the per-user data dir default. Used to read `[browser].extra_args`.
+        #[arg(long)]
+        config: Option<PathBuf>,
     },
     /// Run the `browser` MCP server over stdio (mcp-server spec). Configure
     /// this as an MCP server in an agent host; the browser session is
@@ -64,6 +80,18 @@ enum Command {
         /// Browser selection for headless runs.
         #[arg(long, value_enum, default_value_t = BrowserArg::Auto)]
         browser: BrowserArg,
+        /// Extra raw Chrome/Edge command-line flag to pass at launch
+        /// (repeatable), e.g. `--chrome-arg=--kiosk
+        /// --chrome-arg=--window-size=1440,900`. Merged with
+        /// `[browser].extra_args` from config and the TRUEWRIGHT_CHROME_ARGS env
+        /// var.
+        #[arg(long = "chrome-arg", value_name = "FLAG")]
+        chrome_args: Vec<String>,
+        /// Shortcut for `--chrome-arg=--no-sandbox` (auto-applied anyway in
+        /// a detected container/CI/root context; use this to force it when
+        /// detection misses, e.g. an unprivileged LXC).
+        #[arg(long)]
+        no_sandbox: bool,
         /// Serve over loopback HTTP (bearer-token authenticated) instead of
         /// stdio (mcp-streamable-http spec).
         #[arg(long)]
@@ -101,6 +129,16 @@ enum Command {
         #[command(subcommand)]
         action: AuthCommand,
     },
+    /// Check for and install the latest release, by invoking the
+    /// `truewright-update` companion binary installed alongside this one (from
+    /// the shell/PowerShell installer). A stable, self-documenting alias so
+    /// an auto-update timer can call one consistent command; the companion
+    /// binary already does the actual work.
+    Update {
+        /// Extra arguments forwarded verbatim to `truewright-update`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Runs `task` autonomously using a configured LLM role as the driver
     /// (agent-harness spec) -- `truewright` drives its own browser session
     /// end to end, printing live step progress. Exit code 0 on
@@ -130,6 +168,18 @@ enum Command {
         /// Browser selection for headless runs.
         #[arg(long, value_enum, default_value_t = BrowserArg::Auto)]
         browser: BrowserArg,
+        /// Extra raw Chrome/Edge command-line flag to pass at launch
+        /// (repeatable), e.g. `--chrome-arg=--kiosk
+        /// --chrome-arg=--window-size=1440,900`. Merged with
+        /// `[browser].extra_args` from config and the TRUEWRIGHT_CHROME_ARGS env
+        /// var.
+        #[arg(long = "chrome-arg", value_name = "FLAG")]
+        chrome_args: Vec<String>,
+        /// Shortcut for `--chrome-arg=--no-sandbox` (auto-applied anyway in
+        /// a detected container/CI/root context; use this to force it when
+        /// detection misses, e.g. an unprivileged LXC).
+        #[arg(long)]
+        no_sandbox: bool,
         /// Profile name (isolated browser profile dir). Fixed by default
         /// so repeated runs are deterministic, matching stdio-MCP's own
         /// posture.
@@ -200,28 +250,44 @@ async fn main() -> std::process::ExitCode {
             json,
             headed,
             browser,
+            chrome_args,
+            no_sandbox,
+            config,
         } => {
             let installed_only = matches!(
                 cdp::launch::BrowserPreference::from(browser),
                 cdp::launch::BrowserPreference::Installed
             );
-            doctor::run(json, !headed, installed_only).await
+            let extra_chrome_args = resolve_chrome_args(config.as_deref(), chrome_args, no_sandbox);
+            doctor::run(json, !headed, installed_only, extra_chrome_args).await
         }
         Command::Mcp {
             headed,
             browser,
+            chrome_args,
+            no_sandbox,
             http,
             port,
             token,
             config,
         } => {
             let agent_config = build_mcp_agent_config(config.as_deref());
+            let extra_chrome_args = resolve_chrome_args(config.as_deref(), chrome_args, no_sandbox);
             if http {
-                mcp::run_http(!headed, browser.into(), port, token, agent_config).await
+                mcp::run_http(
+                    !headed,
+                    browser.into(),
+                    extra_chrome_args,
+                    port,
+                    token,
+                    agent_config,
+                )
+                .await
             } else {
-                mcp::run(!headed, browser.into(), agent_config).await
+                mcp::run(!headed, browser.into(), extra_chrome_args, agent_config).await
             }
         }
+        Command::Update { args } => run_self_update(&args),
         Command::Trace { action } => match action {
             TraceCommand::View { name } => match engine::render_trace_html(&name) {
                 Ok(path) => {
@@ -250,10 +316,13 @@ async fn main() -> std::process::ExitCode {
             max_steps,
             headed,
             browser,
+            chrome_args,
+            no_sandbox,
             profile,
             config,
             json,
         } => {
+            let extra_chrome_args = resolve_chrome_args(config.as_deref(), chrome_args, no_sandbox);
             agent_cmd::run(
                 &task,
                 &skills,
@@ -262,6 +331,7 @@ async fn main() -> std::process::ExitCode {
                 max_steps,
                 headed,
                 browser.into(),
+                extra_chrome_args,
                 &profile,
                 config,
                 json,
@@ -314,6 +384,106 @@ fn build_mcp_agent_config(
         harness,
         skill_dirs,
     })
+}
+
+/// Merges the three sources of extra Chrome flags into the final list a CLI
+/// entry point threads down to launch: config `[browser].extra_args`, then
+/// the repeated `--chrome-arg` values, then a `--no-sandbox` shortcut if
+/// requested (de-duplicated against flags already present). The fourth
+/// source, `TRUEWRIGHT_CHROME_ARGS`, is applied at the launch layer itself so
+/// it reaches every path uniformly, and so is deliberately *not* merged
+/// here.
+fn resolve_chrome_args(
+    config_path: Option<&std::path::Path>,
+    cli_args: Vec<String>,
+    no_sandbox: bool,
+) -> Vec<String> {
+    merge_chrome_args(config_browser_args(config_path), cli_args, no_sandbox)
+}
+
+/// The pure merge underlying [`resolve_chrome_args`], split out so the
+/// ordering and `--no-sandbox` de-duplication are unit-testable without
+/// touching the filesystem: config flags first, then CLI `--chrome-arg`,
+/// then a `--no-sandbox` shortcut appended only if not already present.
+fn merge_chrome_args(
+    mut config_args: Vec<String>,
+    cli_args: Vec<String>,
+    no_sandbox: bool,
+) -> Vec<String> {
+    config_args.extend(cli_args);
+    if no_sandbox && !config_args.iter().any(|a| a == "--no-sandbox") {
+        config_args.push("--no-sandbox".to_string());
+    }
+    config_args
+}
+
+/// Reads `[browser].extra_args` from the resolved config, tolerating every
+/// failure the way the browser tools always have: a missing/unparseable
+/// config, or an unresolvable data dir, just yields no extra flags rather
+/// than aborting a launch that would otherwise succeed.
+fn config_browser_args(config_path: Option<&std::path::Path>) -> Vec<String> {
+    let Ok(dir) = resolve_truewright_data_dir() else {
+        return Vec::new();
+    };
+    match llm::Config::load(&dir, config_path) {
+        Ok(config) => config.browser.extra_args,
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Invokes the `truewright-update` companion binary installed alongside this
+/// one, forwarding `args`. A thin, stable alias (task item #3) so an
+/// auto-update timer calls one consistent `truewright update` regardless of how
+/// the companion is named or where it lives.
+fn run_self_update(args: &[String]) -> std::process::ExitCode {
+    let updater = match locate_updater() {
+        Some(path) => path,
+        None => {
+            eprintln!(
+                "truewright update: companion updater '{}' not found next to this binary.",
+                updater_file_name()
+            );
+            eprintln!(
+                "It ships with the shell/PowerShell installer (`install-updater = true`). If you \
+                 built from source or installed another way, update through that channel instead."
+            );
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+
+    match std::process::Command::new(&updater).args(args).status() {
+        Ok(status) => match status.code() {
+            Some(0) => std::process::ExitCode::SUCCESS,
+            // Preserve the updater's own non-zero exit code where it fits a
+            // u8; a signal death (None) has no code, so report a generic
+            // failure.
+            Some(code) => std::process::ExitCode::from(code.clamp(1, 255) as u8),
+            None => std::process::ExitCode::FAILURE,
+        },
+        Err(e) => {
+            eprintln!(
+                "truewright update: failed to run {}: {e}",
+                updater.display()
+            );
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn updater_file_name() -> &'static str {
+    if cfg!(windows) {
+        "truewright-update.exe"
+    } else {
+        "truewright-update"
+    }
+}
+
+/// Locates the `truewright-update` companion in the same directory as the
+/// running `truewright` executable — where every installer places the pair.
+fn locate_updater() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let candidate = exe.parent()?.join(updater_file_name());
+    candidate.is_file().then_some(candidate)
 }
 
 /// Resolves `role` from config and sends one trivial completion, printing
@@ -466,5 +636,34 @@ fn auth_logout(flow: &str) -> std::process::ExitCode {
             eprintln!("logout failed: {e}");
             std::process::ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_chrome_args;
+
+    #[test]
+    fn merge_orders_config_then_cli_and_appends_no_sandbox_once() {
+        // Config flags come first, then the repeated --chrome-arg values.
+        let merged = merge_chrome_args(
+            vec!["--kiosk".into()],
+            vec!["--window-size=1440,900".into()],
+            false,
+        );
+        assert_eq!(merged, vec!["--kiosk", "--window-size=1440,900"]);
+
+        // --no-sandbox shortcut appends when absent...
+        let merged = merge_chrome_args(vec!["--kiosk".into()], vec![], true);
+        assert_eq!(merged, vec!["--kiosk", "--no-sandbox"]);
+
+        // ...but never duplicates one already supplied via config or CLI.
+        let from_config = merge_chrome_args(vec!["--no-sandbox".into()], vec![], true);
+        assert_eq!(from_config, vec!["--no-sandbox"]);
+        let from_cli = merge_chrome_args(vec![], vec!["--no-sandbox".into()], true);
+        assert_eq!(from_cli, vec!["--no-sandbox"]);
+
+        // No shortcut requested and no flags anywhere -> empty.
+        assert!(merge_chrome_args(vec![], vec![], false).is_empty());
     }
 }

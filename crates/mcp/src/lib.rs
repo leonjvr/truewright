@@ -269,6 +269,11 @@ pub struct TruewrightTools {
     console_capture: Arc<Mutex<Option<engine::ConsoleCapture>>>,
     headless: bool,
     browser_pref: cdp::launch::BrowserPreference,
+    /// Raw extra Chrome flags (config `[browser].extra_args` + CLI
+    /// `--chrome-arg`), threaded to every lazily-launched session. Empty in
+    /// the common case; `TRUEWRIGHT_CHROME_ARGS` is applied separately at the
+    /// launch layer and is not included here.
+    extra_chrome_args: Vec<String>,
     /// The `Session::launch` profile-directory name. Both real entry points
     /// (`src/mcp.rs`'s stdio `run` and streamable-HTTP `router`) give this a
     /// randomly-suffixed value unique per process/session -- a stdio server
@@ -323,10 +328,20 @@ impl TruewrightTools {
             console_capture: Arc::new(Mutex::new(None)),
             headless,
             browser_pref,
+            extra_chrome_args: Vec::new(),
             profile_name,
             agent: None,
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Threads raw extra Chrome flags (config `[browser].extra_args` + CLI
+    /// `--chrome-arg`) into every session this server launches. A consuming
+    /// builder, like `with_agent`, so existing constructors and call sites
+    /// are untouched when no extra flags are configured.
+    pub fn with_chrome_args(mut self, extra_chrome_args: Vec<String>) -> Self {
+        self.extra_chrome_args = extra_chrome_args;
+        self
     }
 
     /// Opts this server into task delegation / vision-interpretation
@@ -342,10 +357,14 @@ impl TruewrightTools {
     async fn ensure_session(&self) -> Result<(), McpError> {
         let mut guard = self.session.lock().await;
         if guard.is_none() {
-            let session =
-                engine::Session::launch_with(&self.profile_name, self.headless, self.browser_pref)
-                    .await
-                    .map_err(map_engine_err)?;
+            let session = engine::Session::launch_with_args(
+                &self.profile_name,
+                self.headless,
+                self.browser_pref,
+                &self.extra_chrome_args,
+            )
+            .await
+            .map_err(map_engine_err)?;
             *guard = Some(session);
         }
         Ok(())

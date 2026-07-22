@@ -23,7 +23,9 @@ pub use auth::{
 pub use client::{Client, RoleClient};
 pub use client_compat::CompatClient;
 pub use client_responses::{ResponsesClient, CHATGPT_CODEX_BASE_URL};
-pub use config::{AgentSettings, Config, ProviderConfig, ProviderKind, RoleConfig, SkillsConfig};
+pub use config::{
+    AgentSettings, BrowserConfig, Config, ProviderConfig, ProviderKind, RoleConfig, SkillsConfig,
+};
 pub use error::{LlmError, Result};
 pub use types::{
     ChatRequest, ChatResponse, FinishReason, Message, Part, Role, ToolCall, ToolDef, Usage,

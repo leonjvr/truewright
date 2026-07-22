@@ -28,7 +28,18 @@ The system SHALL discover installed Chrome and Edge on Windows by reading the re
 - **THEN** discovery returns a typed error immediately, without falling back to normal discovery
 
 ### Requirement: Launch with an isolated profile
-The system SHALL launch the browser with `--remote-debugging-port=0` (OS-assigned port) and a dedicated `--user-data-dir` under an OS-appropriate per-user data directory: `%LOCALAPPDATA%\truewright\profiles\<name>` on Windows, `$XDG_DATA_HOME/truewright/profiles/<name>` (falling back to `~/.local/share/truewright/profiles/<name>`) on Linux. The system MUST NOT attach to or launch against the user's live default profile. On Linux, the system SHALL additionally pass `--no-sandbox` only when running as root (required for headless Chromium in an unprivileged container init) — never on Windows, and never on Linux when not running as root.
+The system SHALL launch the browser with `--remote-debugging-port=0` (OS-assigned port) and a dedicated `--user-data-dir` under an OS-appropriate per-user data directory: `%LOCALAPPDATA%\truewright\profiles\<name>` on Windows, `$XDG_DATA_HOME/truewright/profiles/<name>` (falling back to `~/.local/share/truewright/profiles/<name>`) on Linux. The system MUST NOT attach to or launch against the user's live default profile. On Linux, the system SHALL additionally pass `--no-sandbox` when running as root, inside a container, or under CI (detected via the `container`/`CI` environment variables and the `/.dockerenv` / `/run/.containerenv` marker files) — required for headless Chromium where the sandbox cannot initialize — never on Windows. The auto-applied `--no-sandbox` MUST be de-duplicated against one the caller supplied explicitly.
+
+### Requirement: Extra Chrome launch flags
+The system SHALL append caller-supplied raw Chrome/Edge command-line flags to every launched session, from three cumulative sources: the config `[browser].extra_args` list, the repeatable `--chrome-arg` CLI option (on `mcp`, `doctor`, and `agent`), and the `TRUEWRIGHT_CHROME_ARGS` environment variable (whitespace-separated). All three MUST apply together; where two flags conflict, Chrome's own last-flag-wins behavior governs. The `TRUEWRIGHT_CHROME_ARGS` variable SHALL be read at the launch layer so it reaches every entry point uniformly, including the test suite. A `--no-sandbox` CLI shortcut SHALL be available on `mcp`, `doctor`, and `agent` as a convenience equivalent to `--chrome-arg=--no-sandbox`.
+
+#### Scenario: Flags from all three sources merge
+- **WHEN** `[browser].extra_args = ["--kiosk"]` is configured, `--chrome-arg=--window-size=1440,900` is passed, and `TRUEWRIGHT_CHROME_ARGS="--window-position=0,0"` is set
+- **THEN** the launched browser receives all three flags in addition to the built-in ones
+
+#### Scenario: --no-sandbox shortcut forces the flag when detection misses
+- **WHEN** `truewright mcp --no-sandbox` is run in an environment where container/CI/root auto-detection does not fire (e.g. an unprivileged LXC)
+- **THEN** the launched browser still receives `--no-sandbox`, and it is not duplicated if also supplied via config/env/`--chrome-arg`
 
 #### Scenario: First launch creates profile (Windows)
 - **WHEN** the browser is launched on Windows with profile name `default` and no prior profile directory exists
