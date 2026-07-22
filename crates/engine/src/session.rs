@@ -190,7 +190,7 @@ impl Session {
             cdp::launch::launch_with_flags(&discovered, profile_name, headless, extra_chrome_args)
                 .await?;
 
-        let browser = cdp::ops::Browser::connect(&launched.ws_url).await?;
+        let browser = cdp::ops::Browser::connect_launched(&launched).await?;
         let context = browser.new_context().await?;
         let page = context.new_page("about:blank").await?;
         let target_id = page.target_id().to_string();

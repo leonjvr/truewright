@@ -310,11 +310,63 @@ fn split_chrome_args(raw: &str) -> Vec<String> {
     raw.split_whitespace().map(str::to_string).collect()
 }
 
+/// Chrome's automation-oriented default flags, mirroring Playwright's set for
+/// headless runs. These cut background service processes and resident memory —
+/// the biggest wins being `--disable-features=…` (kills background service
+/// processes), `--disable-component-extensions-with-background-pages`,
+/// `--disable-breakpad` (no crash-handler process), `--disable-sync`,
+/// `--metrics-recording-only`, and `--no-service-autorun` — taking the Chrome
+/// process tree from ~15 down to ~10. Applied before caller flags, so any one
+/// can be overridden or removed via `--chrome-arg` / `[browser].extra_args` /
+/// `TRUEWRIGHT_CHROME_ARGS` (Chrome's last-flag-wins rule).
+const HEADLESS_AUTOMATION_FLAGS: &[&str] = &[
+    "--allow-pre-commit-input",
+    "--disable-back-forward-cache",
+    "--disable-breakpad",
+    "--disable-client-side-phishing-detection",
+    "--disable-component-extensions-with-background-pages",
+    "--disable-component-update",
+    "--disable-default-apps",
+    "--disable-field-trial-config",
+    "--disable-hang-monitor",
+    "--disable-infobars",
+    "--disable-ipc-flooding-protection",
+    "--disable-popup-blocking",
+    "--disable-prompt-on-repost",
+    "--disable-search-engine-choice-screen",
+    "--disable-sync",
+    "--force-color-profile=srgb",
+    "--hide-scrollbars",
+    "--metrics-recording-only",
+    "--no-service-autorun",
+    "--no-startup-window",
+    "--password-store=basic",
+    "--use-mock-keychain",
+    "--disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,DestroyProfileOnBrowserClose,\
+     DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,MediaRouter,PaintHolding,\
+     Translate,OptimizationHints,ThirdPartyStoragePartitioning",
+];
+
 pub struct LaunchedBrowser {
     pub kind: BrowserKind,
-    pub ws_url: String,
+    endpoint: Endpoint,
     pub user_data_dir: PathBuf,
     child: Option<Child>,
+}
+
+/// How to reach the launched browser's CDP endpoint. Unix launches default to
+/// a `--remote-debugging-pipe` transport (no TCP port to allocate or scan, and
+/// no `DevToolsActivePort` file to poll — removing a class of attach-timeout
+/// flakiness in sandboxed/container environments); Windows launches, and any
+/// attach-to-external, use the TCP DevTools WebSocket.
+enum Endpoint {
+    WebSocket(String),
+    /// Parent-side CDP pipe transport, taken exactly once when the connection
+    /// is built. Behind a `Mutex<Option<…>>` because [`LaunchedBrowser`] is
+    /// held by shared reference at connect time (see
+    /// `Browser::connect_launched`) yet the transport must be moved out.
+    #[cfg(unix)]
+    Pipe(std::sync::Mutex<Option<crate::transport::PipeTransport>>),
 }
 
 /// Launch with an isolated profile (browser-attach spec: "Launch with an
@@ -346,15 +398,15 @@ pub async fn launch_with_flags(
         .join(profile_name);
     std::fs::create_dir_all(&user_data_dir)?;
 
-    let devtools_port_file = user_data_dir.join("DevToolsActivePort");
-    let _ = std::fs::remove_file(&devtools_port_file); // stale from a prior run
+    // Unix defaults to a `--remote-debugging-pipe` transport; Windows (no pipe
+    // implementation) uses the TCP DevTools port. The transport flag itself is
+    // added below, once, so the two paths share the rest of the command line.
+    let use_pipe = use_cdp_pipe();
 
     let mut cmd = ProcessCommand::new(&browser.path);
-    cmd.arg("--remote-debugging-port=0")
-        .arg(format!("--user-data-dir={}", user_data_dir.display()))
+    cmd.arg(format!("--user-data-dir={}", user_data_dir.display()))
         .arg("--no-first-run")
         .arg("--no-default-browser-check")
-        .arg("--remote-allow-origins=*")
         .arg("--disable-background-networking")
         // Without these, Chrome throttles compositor-frame-dependent work
         // (including the ack for Input.dispatch*Event) to ~once per 5s for
@@ -369,18 +421,13 @@ pub async fn launch_with_flags(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .stdin(std::process::Stdio::null());
-    // Put the browser in its own session/process group (browser-attach
-    // spec: "Clean teardown" — orphaned renderer/GPU/utility children).
-    // Without a real init/reaper (e.g. inside a bare container), a killed
-    // browser's zygote-forked descendants can be reparented and survive
-    // indefinitely instead of dying with their parent; killing the whole
-    // group in `shutdown`/`Drop` closes that gap.
-    #[cfg(unix)]
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
+    if use_pipe {
+        cmd.arg("--remote-debugging-pipe");
+    } else {
+        // `--remote-allow-origins=*` only matters for the HTTP/WS debugging
+        // endpoint (the pipe has no origin check).
+        cmd.arg("--remote-debugging-port=0")
+            .arg("--remote-allow-origins=*");
     }
     if headless {
         // Reduced-footprint flag set (browser-attach spec: "Reduced-footprint
@@ -391,10 +438,19 @@ pub async fn launch_with_flags(
             .arg("--disable-extensions")
             .arg("--mute-audio")
             .arg("--disable-gpu");
+        // Playwright's automation defaults (see HEADLESS_AUTOMATION_FLAGS) —
+        // the bulk of the process/RSS reduction.
+        for flag in HEADLESS_AUTOMATION_FLAGS {
+            cmd.arg(flag);
+        }
         // chrome-headless-shell is headless-only; the mode flag is for full
-        // Chrome binaries.
+        // Chrome binaries. Old `--headless` (not `--headless=new`) is the
+        // lightweight automation mode Playwright uses — `--headless=new` runs
+        // the full browser and spawns extra processes. `--headless=new` stays
+        // opt-in: a caller can pass `--chrome-arg=--headless=new`, which wins
+        // under Chrome's last-flag-wins rule since caller flags come after.
         if !browser.is_headless_shell {
-            cmd.arg("--headless=new");
+            cmd.arg("--headless");
         }
     }
 
@@ -417,18 +473,202 @@ pub async fn launch_with_flags(
         cmd.arg(arg);
     }
 
-    let child = cmd
-        .spawn()
-        .map_err(|e| CdpError::LaunchFailed(format!("{}: {}", browser.path.display(), e)))?;
+    // Transport wiring. On Unix a `--remote-debugging-pipe` launch needs the
+    // two CDP pipes created and their child ends placed on fds 3/4 (Chrome
+    // reads commands from 3, writes to 4); the `setsid` for clean teardown
+    // rides in the same `pre_exec`. On Windows (and a forced-WebSocket Unix
+    // run) there is no pipe, and `setsid` is a no-op that doesn't apply.
+    #[cfg(unix)]
+    let pipe_parent_fds = setup_transport(&mut cmd, use_pipe)?;
+    #[cfg(not(unix))]
+    let _ = use_pipe; // always false off-Unix
 
-    let ws_url = wait_for_devtools_endpoint(&devtools_port_file, Duration::from_secs(10)).await?;
+    if !use_pipe {
+        // Clear any stale port file only on the path that reads one back.
+        let _ = std::fs::remove_file(user_data_dir.join("DevToolsActivePort"));
+    }
+
+    let child = cmd.spawn().map_err(|e| {
+        #[cfg(unix)]
+        if let Some(fds) = pipe_parent_fds {
+            fds.close_all(); // don't leak the pipe fds if the browser never started
+        }
+        CdpError::LaunchFailed(format!("{}: {}", browser.path.display(), e))
+    })?;
+
+    let endpoint = build_endpoint(
+        use_pipe,
+        &user_data_dir,
+        #[cfg(unix)]
+        pipe_parent_fds,
+    )
+    .await?;
 
     Ok(LaunchedBrowser {
         kind: browser.kind,
-        ws_url,
+        endpoint,
         user_data_dir,
         child: Some(child),
     })
+}
+
+/// Whether to use the `--remote-debugging-pipe` transport. Unix defaults to
+/// the pipe; `TRUEWRIGHT_CDP_TRANSPORT=websocket` forces the TCP path back on
+/// (an escape hatch if a pipe ever misbehaves). Off Unix there is no pipe
+/// implementation, so this is always `false`.
+fn use_cdp_pipe() -> bool {
+    if !cfg!(unix) {
+        return false;
+    }
+    !std::env::var("TRUEWRIGHT_CDP_TRANSPORT")
+        .map(|v| v.eq_ignore_ascii_case("websocket") || v.eq_ignore_ascii_case("ws"))
+        .unwrap_or(false)
+}
+
+/// Parent-side ends of the two CDP pipes, held between `spawn` and building
+/// the transport. `cmd_write` feeds Chrome's fd 3 (commands out); `evt_read`
+/// drains Chrome's fd 4 (responses/events in). The two child ends
+/// (`cmd_read`, `evt_write`) are only needed by the forked child's `pre_exec`
+/// and are closed in the parent immediately after spawn.
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+struct PipeParentFds {
+    cmd_write: libc::c_int,
+    evt_read: libc::c_int,
+    cmd_read: libc::c_int,
+    evt_write: libc::c_int,
+}
+
+#[cfg(unix)]
+impl PipeParentFds {
+    fn close_all(&self) {
+        unsafe {
+            libc::close(self.cmd_write);
+            libc::close(self.evt_read);
+            libc::close(self.cmd_read);
+            libc::close(self.evt_write);
+        }
+    }
+}
+
+/// Registers the `pre_exec` for a launch, and (for the pipe transport) creates
+/// the two CDP pipes. Always installs `setsid` so teardown can kill the whole
+/// process group; when `use_pipe`, the same `pre_exec` also `dup2`s the child
+/// pipe ends onto fds 3/4 and clears their close-on-exec so Chrome inherits
+/// them across `exec`.
+#[cfg(unix)]
+#[allow(clippy::result_large_err)]
+fn setup_transport(cmd: &mut ProcessCommand, use_pipe: bool) -> Result<Option<PipeParentFds>> {
+    if !use_pipe {
+        // WebSocket/TCP path: only the process-group isolation is needed.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        return Ok(None);
+    }
+
+    // cmd pipe: parent writes -> child reads (child end goes to fd 3).
+    let (cmd_read, cmd_write) = make_cloexec_pipe()?;
+    // evt pipe: child writes (fd 4) -> parent reads.
+    let (evt_read, evt_write) = make_cloexec_pipe()?;
+
+    // Captured by value (RawFd is Copy) into the child-side closure; the parent
+    // keeps its own copies in the returned struct.
+    unsafe {
+        cmd.pre_exec(move || {
+            // Place the child's pipe ends on the fds Chrome expects, then clear
+            // FD_CLOEXEC so they survive exec. `dup2` onto a distinct fd
+            // already clears CLOEXEC, but the explicit `fcntl` also covers the
+            // case where a source fd is already 3 or 4 (dup2 is then a no-op).
+            if libc::dup2(cmd_read, 3) < 0 || libc::dup2(evt_write, 4) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            libc::fcntl(3, libc::F_SETFD, 0);
+            libc::fcntl(4, libc::F_SETFD, 0);
+            libc::setsid();
+            Ok(())
+        });
+    }
+
+    Ok(Some(PipeParentFds {
+        cmd_write,
+        evt_read,
+        cmd_read,
+        evt_write,
+    }))
+}
+
+/// Builds the connection endpoint after spawn: for the pipe transport, closes
+/// the child ends in the parent (so a browser exit yields EOF on `evt_read`)
+/// and wraps the parent ends in a [`crate::transport::PipeTransport`]; for the
+/// WebSocket transport, polls the `DevToolsActivePort` file for the WS URL.
+#[allow(clippy::result_large_err)]
+async fn build_endpoint(
+    use_pipe: bool,
+    user_data_dir: &Path,
+    #[cfg(unix)] pipe_parent_fds: Option<PipeParentFds>,
+) -> Result<Endpoint> {
+    if !use_pipe {
+        let port_file = user_data_dir.join("DevToolsActivePort");
+        let ws_url = wait_for_devtools_endpoint(&port_file, Duration::from_secs(10)).await?;
+        return Ok(Endpoint::WebSocket(ws_url));
+    }
+
+    #[cfg(unix)]
+    {
+        let fds = pipe_parent_fds.expect("pipe launch always yields parent fds");
+        // The parent has no use for the child ends; closing `evt_write` here is
+        // what lets a browser exit surface as EOF on our reader.
+        unsafe {
+            libc::close(fds.cmd_read);
+            libc::close(fds.evt_write);
+        }
+        let transport =
+            crate::transport::PipeTransport::from_parent_fds(fds.cmd_write, fds.evt_read)?;
+        Ok(Endpoint::Pipe(std::sync::Mutex::new(Some(transport))))
+    }
+    #[cfg(not(unix))]
+    {
+        // Off Unix `use_pipe` is always false, so this arm is unreachable.
+        Err(CdpError::LaunchFailed(
+            "pipe transport is not supported on this platform".into(),
+        ))
+    }
+}
+
+/// Creates a pipe with both ends close-on-exec, returning `(read, write)`.
+/// Linux uses `pipe2(O_CLOEXEC)` (atomic, no fd-leak window); other Unix
+/// falls back to `pipe` + `fcntl`.
+#[cfg(unix)]
+#[allow(clippy::result_large_err)]
+fn make_cloexec_pipe() -> Result<(libc::c_int, libc::c_int)> {
+    let mut fds = [0 as libc::c_int; 2];
+
+    #[cfg(target_os = "linux")]
+    let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
+    #[cfg(not(target_os = "linux"))]
+    let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if rc != 0 {
+        return Err(CdpError::Io(std::io::Error::last_os_error()));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    for &fd in &fds {
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) < 0 {
+                let e = std::io::Error::last_os_error();
+                libc::close(fds[0]);
+                libc::close(fds[1]);
+                return Err(CdpError::Io(e));
+            }
+        }
+    }
+
+    Ok((fds[0], fds[1]))
 }
 
 async fn wait_for_devtools_endpoint(port_file: &Path, timeout: Duration) -> Result<String> {
@@ -453,13 +693,37 @@ async fn wait_for_devtools_endpoint(port_file: &Path, timeout: Duration) -> Resu
 impl LaunchedBrowser {
     /// Wrap a browser this process did not launch (browser-attach spec:
     /// "Attach to externally started browser"). `shutdown` then leaves the
-    /// process running.
+    /// process running. An external attach is always over the TCP DevTools
+    /// WebSocket — the pipe transport only exists for browsers we spawn.
     pub fn attach_existing(kind: BrowserKind, ws_url: String, user_data_dir: PathBuf) -> Self {
         Self {
             kind,
-            ws_url,
+            endpoint: Endpoint::WebSocket(ws_url),
             user_data_dir,
             child: None,
+        }
+    }
+
+    /// The DevTools WebSocket URL, when this launch used the TCP transport
+    /// (Windows, or an attach-to-external). `None` for a Unix CDP pipe, whose
+    /// connection is built from the inherited pipe fds instead — see
+    /// [`Browser::connect_launched`](crate::ops::Browser::connect_launched).
+    pub fn ws_url(&self) -> Option<&str> {
+        match &self.endpoint {
+            Endpoint::WebSocket(url) => Some(url),
+            #[cfg(unix)]
+            Endpoint::Pipe(_) => None,
+        }
+    }
+
+    /// Takes the CDP pipe transport out for building the connection. Returns
+    /// `None` on a WebSocket endpoint, or if already taken (connect happens
+    /// once). `pub(crate)` — only `Browser::connect_launched` calls it.
+    #[cfg(unix)]
+    pub(crate) fn take_pipe_transport(&self) -> Option<crate::transport::PipeTransport> {
+        match &self.endpoint {
+            Endpoint::Pipe(slot) => slot.lock().ok().and_then(|mut guard| guard.take()),
+            Endpoint::WebSocket(_) => None,
         }
     }
 

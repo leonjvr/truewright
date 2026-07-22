@@ -28,7 +28,7 @@ The system SHALL discover installed Chrome and Edge on Windows by reading the re
 - **THEN** discovery returns a typed error immediately, without falling back to normal discovery
 
 ### Requirement: Launch with an isolated profile
-The system SHALL launch the browser with `--remote-debugging-port=0` (OS-assigned port) and a dedicated `--user-data-dir` under an OS-appropriate per-user data directory: `%LOCALAPPDATA%\truewright\profiles\<name>` on Windows, `$XDG_DATA_HOME/truewright/profiles/<name>` (falling back to `~/.local/share/truewright/profiles/<name>`) on Linux. The system MUST NOT attach to or launch against the user's live default profile. On Linux, the system SHALL additionally pass `--no-sandbox` when running as root, inside a container, or under CI (detected via the `container`/`CI` environment variables and the `/.dockerenv` / `/run/.containerenv` marker files) — required for headless Chromium where the sandbox cannot initialize — never on Windows. The auto-applied `--no-sandbox` MUST be de-duplicated against one the caller supplied explicitly.
+The system SHALL launch the browser with a dedicated `--user-data-dir` under an OS-appropriate per-user data directory: `%LOCALAPPDATA%\truewright\profiles\<name>` on Windows, `$XDG_DATA_HOME/truewright/profiles/<name>` (falling back to `~/.local/share/truewright/profiles/<name>`) on Linux. The CDP transport is chosen by platform: on Unix the launch SHALL use `--remote-debugging-pipe` (CDP over inherited fds 3/4, no TCP port), on Windows `--remote-debugging-port=0` (OS-assigned loopback port). A `TRUEWRIGHT_CDP_TRANSPORT=websocket` override SHALL force the TCP/WebSocket path on Unix as an escape hatch. The system MUST NOT attach to or launch against the user's live default profile. On Linux, the system SHALL additionally pass `--no-sandbox` when running as root, inside a container, or under CI (detected via the `container`/`CI` environment variables and the `/.dockerenv` / `/run/.containerenv` marker files) — required for headless Chromium where the sandbox cannot initialize — never on Windows. The auto-applied `--no-sandbox` MUST be de-duplicated against one the caller supplied explicitly.
 
 ### Requirement: Extra Chrome launch flags
 The system SHALL append caller-supplied raw Chrome/Edge command-line flags to every launched session, from three cumulative sources: the config `[browser].extra_args` list, the repeatable `--chrome-arg` CLI option (on `mcp`, `doctor`, and `agent`), and the `TRUEWRIGHT_CHROME_ARGS` environment variable (whitespace-separated). All three MUST apply together; where two flags conflict, Chrome's own last-flag-wins behavior governs. The `TRUEWRIGHT_CHROME_ARGS` variable SHALL be read at the launch layer so it reaches every entry point uniformly, including the test suite. A `--no-sandbox` CLI shortcut SHALL be available on `mcp`, `doctor`, and `agent` as a convenience equivalent to `--chrome-arg=--no-sandbox`.
@@ -49,9 +49,13 @@ The system SHALL append caller-supplied raw Chrome/Edge command-line flags to ev
 - **WHEN** the browser is launched on Linux with profile name `default` and no prior profile directory exists
 - **THEN** the directory `$XDG_DATA_HOME/truewright/profiles/default` (or `~/.local/share/truewright/profiles/default`) is created and the browser starts using it
 
-#### Scenario: Debugging endpoint resolution
-- **WHEN** the browser process starts
+#### Scenario: Debugging endpoint resolution (WebSocket transport)
+- **WHEN** the browser process starts on the TCP/WebSocket path (Windows, or a forced-WebSocket Unix run)
 - **THEN** the system reads the DevTools WebSocket URL (from the `DevToolsActivePort` file or stderr banner) and connects within 10 seconds or returns a typed `AttachTimeout` error
+
+#### Scenario: Pipe transport needs no endpoint discovery
+- **WHEN** the browser process starts on the Unix `--remote-debugging-pipe` path
+- **THEN** the system speaks CDP directly over the inherited fds with no port allocation, no `DevToolsActivePort` poll, and therefore no attach-timeout scan
 
 ### Requirement: Clean teardown
 The system SHALL close browser contexts it created and, when it launched the browser process itself, SHALL terminate that process on shutdown. Teardown MUST leave no orphaned browser processes from launched instances. On Unix, the launched browser SHALL run in its own session/process group (`setsid`) so that teardown can terminate the whole group — not just the root process — ensuring zygote-forked renderer/GPU/utility children do not survive as orphans when there is no init/reaper (e.g. inside a bare container).
@@ -69,15 +73,19 @@ The system SHALL close browser contexts it created and, when it launched the bro
 - **THEN** its renderer/GPU/utility child processes are also terminated, not left running as orphans
 
 ### Requirement: Reduced-footprint headless launch flags
-When launching headless, the system SHALL pass memory/CPU-reduction flags in addition to the base flag set: `--disable-dev-shm-usage`, `--disable-software-rasterizer`, `--disable-extensions`, `--mute-audio`, and `--disable-gpu`. Headed launches MUST NOT receive `--disable-gpu`.
+When launching headless, the system SHALL pass memory/CPU-reduction flags in addition to the base flag set: `--disable-dev-shm-usage`, `--disable-software-rasterizer`, `--disable-extensions`, `--mute-audio`, and `--disable-gpu`. It SHALL additionally pass Chrome's automation-oriented default flags (matching Playwright's set — e.g. `--disable-features=…` to kill background service processes, `--disable-component-extensions-with-background-pages`, `--disable-breakpad`, `--disable-sync`, `--metrics-recording-only`, `--no-service-autorun`, `--no-startup-window`, `--use-mock-keychain`, `--password-store=basic`, `--force-color-profile=srgb`, `--hide-scrollbars`), which cut the Chrome process tree from ~15 down to ~10. For a full-Chrome headless run (not `chrome-headless-shell`), the system SHALL use the lightweight old `--headless` mode, not `--headless=new`; `--headless=new` remains opt-in via a caller flag override. Every one of these flags MUST remain overridable/removable via `--chrome-arg` / `[browser].extra_args` / `TRUEWRIGHT_CHROME_ARGS` (Chrome's last-flag-wins rule). Headed launches MUST NOT receive `--disable-gpu` or the automation flag set.
 
-#### Scenario: Headless launch carries reduction flags
+#### Scenario: Headless launch carries reduction and automation flags
 - **WHEN** a browser is launched headless
-- **THEN** the spawned process's command line includes the reduction flags listed above
+- **THEN** the spawned process's command line includes the reduction flags and the automation flag set, and (for full Chrome) old `--headless`
+
+#### Scenario: Caller can override a default flag
+- **WHEN** a headless launch is given `--chrome-arg=--headless=new`
+- **THEN** the later caller-supplied `--headless=new` wins over the default `--headless`
 
 #### Scenario: Headed launch keeps GPU
 - **WHEN** a browser is launched headed
-- **THEN** `--disable-gpu` is not passed
+- **THEN** `--disable-gpu` and the automation flag set are not passed
 
 ### Requirement: Managed chrome-headless-shell for headless runs
 For headless launches, the system SHALL prefer a managed `chrome-headless-shell` binary: resolve the latest stable version for the current platform from the Chrome for Testing known-good-versions endpoint, download and extract it into a per-user cache directory (`<data-dir>/truewright/browsers/<version>/`), and reuse an already-cached shell without any network access. If resolution, download, or extraction fails, the system MUST fall back to the installed browser with a logged warning rather than failing the launch. Headed launches SHALL always use the installed browser. Callers MUST be able to force the installed browser for headless runs too (opt-out). When `TRUEWRIGHT_CHROME_PATH` is set, it SHALL take priority over the managed shell as well as over normal discovery -- a headless launch with the override set MUST use exactly that binary, not the cached/downloaded shell.

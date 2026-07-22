@@ -23,6 +23,23 @@ impl Browser {
         Ok(Self { conn, session })
     }
 
+    /// Connects using whatever transport the launch produced: a Unix CDP pipe
+    /// (no port allocation, no `DevToolsActivePort` poll) when available, else
+    /// the TCP DevTools WebSocket. The single connect path for both
+    /// `launch`-ed and `attach_existing` browsers.
+    pub async fn connect_launched(launched: &LaunchedBrowser) -> Result<Self> {
+        #[cfg(unix)]
+        if let Some(transport) = launched.take_pipe_transport() {
+            let conn = Connection::new(transport);
+            let session = conn.browser_session();
+            return Ok(Self { conn, session });
+        }
+        let ws_url = launched.ws_url().ok_or_else(|| {
+            CdpError::LaunchFailed("launched browser exposes no CDP endpoint".into())
+        })?;
+        Self::connect(ws_url).await
+    }
+
     pub async fn version(&self) -> Result<browser::GetVersionResponse> {
         self.session
             .execute::<browser::GetVersion>(Default::default())
@@ -567,9 +584,8 @@ pub async fn run_full_cycle(
     headless: bool,
 ) -> Result<CycleReport> {
     let launched = launch::launch(discovered, profile_name, headless).await?;
-    let ws_url = launched.ws_url.clone();
 
-    let result = run_full_cycle_inner(&ws_url).await;
+    let result = run_full_cycle_inner(&launched).await;
     teardown(launched).await;
 
     let (title, screenshot_len) = result?;
@@ -580,8 +596,8 @@ pub async fn run_full_cycle(
     })
 }
 
-async fn run_full_cycle_inner(ws_url: &str) -> Result<(serde_json::Value, usize)> {
-    let browser = Browser::connect(ws_url).await?;
+async fn run_full_cycle_inner(launched: &LaunchedBrowser) -> Result<(serde_json::Value, usize)> {
+    let browser = Browser::connect_launched(launched).await?;
     let context = browser.new_context().await?;
     let page = context.new_page("about:blank").await?;
     page.navigate_and_wait("https://example.com", Duration::from_secs(15))

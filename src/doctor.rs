@@ -73,6 +73,9 @@ struct BrowserReport {
     /// GPU/utility children) while the page was loaded (doctor-cli spec:
     /// "Process-tree memory measurement").
     tree_rss_mb: Option<f64>,
+    /// Number of processes in that tree — the direct signal for the
+    /// launch-flag reductions (fewer background service processes).
+    tree_process_count: Option<usize>,
     passed: bool,
 }
 
@@ -220,20 +223,19 @@ async fn check_browser(
         }
     };
 
-    let ws_url = launched.ws_url.clone();
     let root_pid = launched.pid();
-    let (functional_steps, latency, tree_rss_mb) = run_functional_steps(&ws_url, root_pid).await;
+    let (functional_steps, latency, tree_stats) = run_functional_steps(&launched, root_pid).await;
     steps.extend(functional_steps);
     shutdown(launched).await;
 
-    finish(discovered, steps, latency, tree_rss_mb)
+    finish(discovered, steps, latency, tree_stats)
 }
 
 fn finish(
     discovered: &DiscoveredBrowser,
     steps: Vec<StepResult>,
     latency: Option<LatencyReport>,
-    tree_rss_mb: Option<f64>,
+    tree_stats: Option<TreeStats>,
 ) -> BrowserReport {
     let passed = steps.iter().all(StepResult::is_ok);
     BrowserReport {
@@ -242,13 +244,25 @@ fn finish(
         headless_shell: discovered.is_headless_shell,
         steps,
         latency,
-        tree_rss_mb,
+        tree_rss_mb: tree_stats.map(|s| s.rss_mb),
+        tree_process_count: tree_stats.map(|s| s.process_count),
         passed,
     }
 }
 
-/// Sums resident memory of `root_pid` and all its descendants, in MB.
-fn measure_tree_rss_mb(root_pid: u32) -> Option<f64> {
+/// Resident memory and process count of a browser's full process tree while
+/// a page is loaded (doctor-cli spec: "Process-tree memory measurement").
+/// The process count is the direct signal for the launch-flag work: fewer
+/// background service processes ≈ lower memory.
+#[derive(Debug, Clone, Copy, Serialize)]
+struct TreeStats {
+    rss_mb: f64,
+    process_count: usize,
+}
+
+/// Sums resident memory (MB) and counts the processes of `root_pid` and all
+/// its descendants.
+fn measure_tree_stats(root_pid: u32) -> Option<TreeStats> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
     let mut sys = System::new();
@@ -287,7 +301,10 @@ fn measure_tree_rss_mb(root_pid: u32) -> Option<f64> {
             stack.extend(kids.iter().copied());
         }
     }
-    Some(total_bytes as f64 / 1024.0 / 1024.0)
+    Some(TreeStats {
+        rss_mb: total_bytes as f64 / 1024.0 / 1024.0,
+        process_count: visited.len(),
+    })
 }
 
 async fn shutdown(launched: LaunchedBrowser) {
@@ -301,12 +318,12 @@ async fn shutdown(launched: LaunchedBrowser) {
 /// failure — matching "failures MUST NOT abort checks for other browsers"
 /// at the step level too.
 async fn run_functional_steps(
-    ws_url: &str,
+    launched: &LaunchedBrowser,
     root_pid: Option<u32>,
-) -> (Vec<StepResult>, Option<LatencyReport>, Option<f64>) {
+) -> (Vec<StepResult>, Option<LatencyReport>, Option<TreeStats>) {
     let mut steps = Vec::new();
 
-    let (connect_result, dur) = time(Browser::connect(ws_url)).await;
+    let (connect_result, dur) = time(Browser::connect_launched(launched)).await;
     let browser = match connect_result {
         Ok(b) => {
             steps.push(StepResult::passed("connect", dur));
@@ -371,12 +388,12 @@ async fn run_functional_steps(
     let (nav_result, dur) =
         time(page.navigate_and_wait("https://example.com", Duration::from_secs(15))).await;
     let mut latency = None;
-    let mut tree_rss_mb = None;
+    let mut tree_stats = None;
     match nav_result {
         Ok(()) => {
             steps.push(StepResult::passed("navigate", dur));
 
-            tree_rss_mb = root_pid.and_then(measure_tree_rss_mb);
+            tree_stats = root_pid.and_then(measure_tree_stats);
 
             let (eval_result, dur) = time(page.evaluate("document.title")).await;
             match eval_result {
@@ -410,7 +427,7 @@ async fn run_functional_steps(
     }
     let _ = context.dispose().await;
 
-    (steps, latency, tree_rss_mb)
+    (steps, latency, tree_stats)
 }
 
 fn skip_rest(steps: &mut Vec<StepResult>, names: &[&str]) {
@@ -494,7 +511,11 @@ fn print_text_report(report: &DoctorReport) {
             }
         }
         if let Some(rss) = browser.tree_rss_mb {
-            println!("  tree memory: {rss:.1} MB (browser + all child processes)");
+            let procs = browser
+                .tree_process_count
+                .map(|n| format!(", {n} processes"))
+                .unwrap_or_default();
+            println!("  tree memory: {rss:.1} MB (browser + all child processes{procs})");
         }
         println!("  result: {}", if browser.passed { "PASS" } else { "FAIL" });
         println!();

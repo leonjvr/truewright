@@ -32,11 +32,11 @@
 - **THEN** stdout parses as valid JSON containing per-browser step results and latency numbers, with human-readable text suppressed
 
 ### Requirement: Process-tree memory measurement
-`truewright doctor` SHALL measure and report the total resident memory (RSS) of the launched browser's full process tree (the root browser process plus its child renderer/GPU/utility processes) while a page is loaded, per browser checked. The JSON report MUST include this as a numeric field so before/after comparisons between browser binaries are measurable.
+`truewright doctor` SHALL measure and report the total resident memory (RSS) of the launched browser's full process tree (the root browser process plus its child renderer/GPU/utility processes) while a page is loaded, per browser checked. It SHALL also report the number of processes in that tree (`tree_process_count`) — the direct signal for launch-flag reductions that shed background service processes. The JSON report MUST include both as numeric fields so before/after comparisons between browser binaries and flag sets are measurable.
 
 #### Scenario: Tree memory in the report
 - **WHEN** `truewright doctor --json` completes a cycle against a browser
-- **THEN** the browser's report includes a `tree_rss_mb` field with a value greater than zero
+- **THEN** the browser's report includes a `tree_rss_mb` field with a value greater than zero and a `tree_process_count` field with the process count of the tree
 
 #### Scenario: Comparing binaries
 - **WHEN** doctor runs against both a managed headless-shell and an installed browser
